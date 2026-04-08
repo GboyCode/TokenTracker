@@ -79,6 +79,23 @@ tokentracker doctor       # Health check
   <img src="https://raw.githubusercontent.com/mm7894215/tokentracker/main/docs/screenshots/dashboard-light.png" alt="Token Tracker Dashboard (Light)" width="800" />
 </div>
 
+## Desktop Widgets
+
+Pin your token usage to the macOS desktop with four focused widgets. Each one shows a single thing well — no chrome, no titles, no "updated just now" footer. Drop them anywhere via right-click → **Edit Widgets** → search "TokenTracker".
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/mm7894215/tokentracker/main/docs/screenshots/widgets-overview.png" alt="TokenTracker desktop widgets" width="800" />
+</div>
+
+| Widget | Sizes | What it shows |
+|---|---|---|
+| **Usage** | S / M / L / XL | Today's tokens with delta vs yesterday. Medium adds a 7-day hero block + 14-day sparkline. Large adds a 30-day hero block, 30-day bar chart, and inline top 3 models. |
+| **Activity Heatmap** | M / L / XL | GitHub-style daily activity grid filling the whole tile, with current streak as a tint chip in the corner. |
+| **Top Models** | S / M / L | Ranked list of the most-used models with token counts, share %, and colored bars. |
+| **Usage Limits** | M / L | Rate-limit progress for Claude / Codex / Cursor / Gemini / Kiro / Antigravity. Auto-sorted by urgency, grouped by provider, with reset countdowns. Bars and labels turn red when ≥ 90 %. |
+
+Widgets refresh every 15 minutes (and immediately whenever the menu bar app pulls fresh data). All data is read from the same local snapshot the dashboard uses — no extra network requests, no extra background work.
+
 ## Leaderboard
 
 Compare your token usage with developers worldwide. Sign in to join the ranking.
@@ -93,6 +110,7 @@ Compare your token usage with developers worldwide. Sign in to join the ranking.
 - **Local-First** — All data stays on your machine. No cloud account required.
 - **Zero-Config** — Hooks auto-detect and configure on first run
 - **Built-in Dashboard** — Web UI with usage trends, model breakdowns, heatmaps
+- **Desktop Widgets** — Four focused macOS widgets (Usage / Heatmap / Top Models / Usage Limits)
 - **Leaderboard** — Global ranking with weekly, monthly, and all-time stats
 - **Privacy-First** — Only token counts tracked, never prompts or responses
 

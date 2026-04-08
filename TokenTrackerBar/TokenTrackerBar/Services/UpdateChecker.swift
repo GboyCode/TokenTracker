@@ -200,9 +200,24 @@ final class UpdateChecker {
         let totalMB = Double(totalSize) / 1_048_576
         statusText = "Downloading 0%..."
 
-        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        // Download into the app's own data directory rather than ~/Downloads/.
+        // Downloads is TCC-protected on macOS, so writing there triggers a
+        // "TokenTrackerBar wants to access files in your Downloads folder"
+        // prompt every time silent auto-update fires — particularly noisy
+        // for ad-hoc-signed builds where TCC grants don't persist across
+        // re-installs. Application Support is owned by the user and not
+        // gated by TCC, so the silent updater stays silent.
+        let supportDir = (try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ))?.appendingPathComponent("TokenTrackerBar/updates", isDirectory: true)
             ?? FileManager.default.temporaryDirectory
-        let destURL = downloadsDir.appendingPathComponent(asset.name)
+        if !FileManager.default.fileExists(atPath: supportDir.path) {
+            try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
+        }
+        let destURL = supportDir.appendingPathComponent(asset.name)
 
         if FileManager.default.fileExists(atPath: destURL.path) {
             try? FileManager.default.removeItem(at: destURL)
@@ -419,7 +434,7 @@ final class UpdateChecker {
     }
 
     /// Uses `URLSessionDownloadDelegate` so progress reflects bytes written to the temp file.
-    /// The previous implementation polled the final `~/Downloads/...` path, but `URLSession.download`
+    /// The previous implementation polled the final destination path, but `URLSession.download`
     /// only writes there after completion, so the percentage stayed at 0%.
     private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate {
         private let destURL: URL
