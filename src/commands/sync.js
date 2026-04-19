@@ -32,6 +32,9 @@ const { createProgress, renderBar, formatNumber, formatBytes } = require("../lib
 const {
   normalizeState: normalizeUploadState,
   decideAutoUpload,
+  recordUploadFailure,
+  recordUploadSuccess,
+  parseRetryAfterMs,
 } = require("../lib/upload-throttle");
 const {
   isCursorInstalled,
@@ -436,7 +439,24 @@ async function cmdSync(argv) {
           maxBatches: opts.drain ? 100 : 5,
           batchSize: 200,
         });
+        // Record success so the exponential backoff step resets — otherwise
+        // a single past failure keeps us pessimistically throttled forever.
+        uploadThrottleState = recordUploadSuccess({
+          nowMs: Date.now(),
+          state: uploadThrottleState,
+        });
+        await writeJson(uploadThrottlePath, uploadThrottleState);
       } catch (e) {
+        // Persist a backoff on 429 / 5xx so the next auto-sync waits instead
+        // of retrying immediately and making the rate-limit worse. The
+        // throttle module already parses Retry-After when we surface it on
+        // the error object (drainQueueToCloud stamps err.status + err.retryAfterMs).
+        uploadThrottleState = recordUploadFailure({
+          nowMs: Date.now(),
+          state: uploadThrottleState,
+          error: e,
+        });
+        await writeJson(uploadThrottlePath, uploadThrottleState);
         if (!opts.auto) {
           process.stderr.write(`Upload error: ${e?.message || e}\n`);
         }
@@ -848,7 +868,12 @@ async function drainQueueToCloud({ baseUrl, deviceToken, queuePath, queueStatePa
     let data = {};
     try { data = JSON.parse(rawText); } catch { data = {}; }
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${rawText.substring(0, 500)}`);
+      const err = new Error(`HTTP ${res.status}: ${rawText.substring(0, 500)}`);
+      err.status = res.status;
+      const retryAfter = res.headers?.get?.("Retry-After") ?? null;
+      const retryAfterMs = parseRetryAfterMs(retryAfter);
+      if (retryAfterMs !== null) err.retryAfterMs = retryAfterMs;
+      throw err;
     }
 
     inserted += Number(data?.inserted || 0);
