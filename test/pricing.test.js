@@ -54,6 +54,10 @@ const FIXTURE_LITELLM = {
     output_cost_per_token: 1e-5,
     cache_read_input_token_cost: 1.25e-7,
   },
+  "gpt-4o": {
+    input_cost_per_token: 2.5e-6,
+    output_cost_per_token: 1e-5,
+  },
   "gemini-2.5-pro": {
     input_cost_per_token: 1.25e-6,
     output_cost_per_token: 1e-5,
@@ -146,6 +150,41 @@ test("matcher: lookupPricing returns miss for completely unknown model", () => {
     litellm: { "gpt-5": { input: 1 } },
   });
   assert.equal(r.hit, false);
+});
+
+test("matcher: Antigravity model aliases only apply to Antigravity source", () => {
+  const litellm = { "gpt-4o": { input: 999, output: 999 } };
+  const curated = {
+    exact: { "antigravity-gpt-oss-120b": { input: 2.5, output: 10 } },
+    alias: {},
+    fuzzy: [],
+  };
+  const generic = matcher.lookupPricing("gpt-oss-120b", {
+    curated,
+    litellm,
+    source: "openrouter",
+  });
+  assert.equal(generic.hit, false);
+
+  const antigravity = matcher.lookupPricing("gpt-oss-120b", {
+    curated,
+    litellm,
+    source: "antigravity",
+  });
+  assert.equal(antigravity.hit, true);
+  assert.equal(antigravity.source, "curated:exact");
+  assert.equal(antigravity.value.input, 2.5);
+});
+
+test("matcher: Antigravity model normalization covers families without gpt-4o fallback", () => {
+  assert.equal(matcher.normalizeAntigravityModel("Gemini 3.5 Pro"), "gemini-2.5-pro");
+  assert.equal(matcher.normalizeAntigravityModel("Gemini 3.5 Flash"), "gemini-2.5-flash");
+  assert.equal(matcher.normalizeAntigravityModel("Claude Haiku 4.6"), "claude-haiku-4-6");
+  assert.equal(
+    matcher.normalizeAntigravityModel("gpt-oss-120b"),
+    "antigravity-gpt-oss-120b",
+  );
+  assert.notEqual(matcher.normalizeAntigravityModel("gpt-oss-20b"), "gpt-4o");
 });
 
 test("matcher: convertLitellmEntry rounds away float drift (1e-7 * 1e6 must be 0.1)", () => {
@@ -272,6 +311,40 @@ test("index: getModelPricing finds LiteLLM mainstream models with correct unit c
   assert.equal(sonnet.output, 15);
   assert.equal(sonnet.cache_read, 0.3);
   assert.equal(sonnet.cache_write, 3.75);
+});
+
+test("index: computeRowCost scopes Antigravity-only model aliases by source", async () => {
+  pricing.resetPricingForTests();
+  const cachePath = tmpCachePath();
+  await pricing.ensurePricingLoaded({
+    cachePath,
+    fetchImpl: makeFetchImpl(FIXTURE_LITELLM),
+  });
+  const row = {
+    model: "gpt-oss-120b",
+    input_tokens: 1_000,
+    cached_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    output_tokens: 1_000,
+    reasoning_output_tokens: 0,
+  };
+  assert.equal(pricing.computeRowCost({ ...row, source: "openrouter" }), 0);
+  assert.equal(pricing.computeRowCost({ ...row, source: "antigravity" }), 0.0125);
+  assert.equal(pricing.computeRowCost({ ...row, model: "gpt-oss-20b", source: "antigravity" }), 0);
+});
+
+test("index: negative cache is scoped by source for Antigravity aliases", async () => {
+  pricing.resetPricingForTests();
+  const cachePath = tmpCachePath();
+  await pricing.ensurePricingLoaded({
+    cachePath,
+    fetchImpl: makeFetchImpl(FIXTURE_LITELLM),
+  });
+  assert.equal(pricing.getModelPricing("gpt-oss-120b", { source: "openrouter" }).input, 0);
+  assert.equal(
+    pricing.getModelPricing("gpt-oss-120b", { source: "antigravity" }).input,
+    2.5,
+  );
 });
 
 test("index: getModelPricing populates negativeCache and short-circuits second call", async () => {

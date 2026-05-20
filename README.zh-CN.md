@@ -78,7 +78,7 @@ brew install mm7894215/tokentracker/tokentracker
 
 ## ✨ 特性
 
-- 🔌 **开箱即用支持 16 款 AI 工具** —— Claude Code、Codex CLI、Cursor、Gemini CLI、Kiro、OpenCode、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、Grok Build、oh-my-pi、Kilo CLI、Kilo Code
+- 🔌 **开箱即用支持 17 款 AI 工具** —— Claude Code、Codex CLI、Cursor、Gemini CLI、Kiro、OpenCode、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、Grok Build、oh-my-pi、Kilo CLI、Kilo Code、Antigravity
 - 🏠 **100% 本地** —— Token 数据绝不离开你的机器。无账号、无 API Key
 - 🚀 **零配置** —— 首次运行自动安装所有 hook。30 秒从零到 Dashboard
 - 📊 **漂亮的 Dashboard** —— 用量趋势、按模型的成本分解、GitHub 风格活跃度热力图、按项目归因
@@ -149,6 +149,7 @@ brew install mm7894215/tokentracker/tokentracker
 | **Cursor** | ✅ 自动 | API + SQLite 中的 auth token |
 | **Kiro** | ✅ 自动 | SQLite + JSONL 混合读取 |
 | **Gemini CLI** | ✅ 自动 | SessionEnd hook |
+| **Antigravity** | ✅ 自动 | 被动读取 transcript.jsonl（`~/.gemini/{antigravity,antigravity-ide,antigravity-cli}/brain/**/transcript.jsonl`） |
 | **OpenCode** | ✅ 自动 | 插件系统 + SQLite |
 | **OpenClaw** | ✅ 自动 | Session 插件 |
 | **Every Code** | ✅ 自动 | TOML notify hook |
@@ -164,7 +165,7 @@ brew install mm7894215/tokentracker/tokentracker
 > **需要手动装什么插件 / hook 吗？** 不需要。`tokentracker`（或 `tokentracker init`）第一次跑的时候会全部搞定：
 > - **基于 hook 的工具**（Claude Code、Codex、Gemini、Every Code、**CodeBuddy**、**Grok Build**）—— 我们把 SessionEnd hook 或 TOML notify 条目写入它们自己的配置文件
 > - **基于插件的工具**（OpenCode、**OpenClaw**）—— 插件随 npm 包一起分发（`~/.tokentracker/app/openclaw-plugin/`），通过对应工具自己的 CLI 挂接（`openclaw plugins install --link …` + `enable`）。无需下载、无需拖拽
-> - **被动读取类**（Cursor、Kiro、Hermes、Kimi Code、Copilot、**Grok Build**、**oh-my-pi**、**Kilo CLI**、**Kilo Code**）—— 完全不往它们里面塞东西，只读取它们自己产生的文件（SQLite DB、JSONL、OTEL 导出）
+> - **被动读取类**（Cursor、Kiro、Hermes、Kimi Code、Copilot、**Grok Build**、**oh-my-pi**、**Kilo CLI**、**Kilo Code**、**Antigravity**）—— 完全不往它们里面塞东西，只读取它们自己产生的文件（SQLite DB、JSONL、OTEL 导出、会话轨迹日志）
 > - **Grok Build 估算说明** —— Grok 当前的 `signals.json` 暴露的是 `contextTokensUsed` 快照，所以在 Grok 提供按调用粒度的遥测之前，TokenTracker 对 Grok 的用量与成本是估算值
 >
 > 任何时候都可以用 `tokentracker status` 查看每个集成的状态。如果显示 `skipped`，`detail` 列会解释原因（例如某工具 CLI 不在 `PATH` 上、config 不可读等）。
@@ -401,7 +402,7 @@ xattr -cr /Applications/TokenTrackerBar.app
 
 ## 🙏 致谢
 
-Clawd 像素风形象的灵感来自 [@marciogranzotto](https://github.com/marciogranzotto) 的 [Clawd-on-Desk](https://github.com/Angel2518975237/Clawd-on-Desk)。Clawd 角色设计归属 Anthropic。本项目是社区项目，和 Anthropic 无官方隶属关系。
+Clawd 角色设计归属 Anthropic。本项目是社区项目，和 Anthropic 无官方隶属关系。
 
 ## License
 

@@ -82,17 +82,25 @@ function resetPricingForTests() {
   state.negativeCache.clear();
 }
 
-function getModelPricing(model) {
+function getModelPricing(model, opts = {}) {
   if (!model) return ZERO_PRICING;
-  if (state.negativeCache.has(model)) return ZERO_PRICING;
+  let lookupSource = null;
+  if (typeof opts === "string") {
+    lookupSource = opts.toLowerCase();
+  } else if (typeof opts.source === "string") {
+    lookupSource = opts.source.toLowerCase();
+  }
+  const cacheKey = lookupSource ? `${lookupSource}\0${model}` : model;
+  if (state.negativeCache.has(cacheKey)) return ZERO_PRICING;
 
   const result = lookupPricing(model, {
     curated: curatedOverrides,
     litellm: state.litellmPerMillionMap,
+    source: lookupSource,
   });
   if (result.hit) return result.value;
 
-  state.negativeCache.add(model);
+  state.negativeCache.add(cacheKey);
   return ZERO_PRICING;
 }
 
@@ -100,7 +108,7 @@ function getModelPricing(model) {
 // computeRowCost in src/lib/local-api.js. Moved here so vite mock + local
 // server share one source of truth.
 function computeRowCost(row) {
-  const pricing = getModelPricing(row.model);
+  const pricing = getModelPricing(row.model, { source: row.source });
   const reasoningIncludedInOutput = row.source === "codex" || row.source === "every-code";
   const reasoningCost = reasoningIncludedInOutput
     ? 0

@@ -37,6 +37,8 @@ const {
   parseCraftIncremental,
   resolveGrokBuildSessions,
   parseGrokBuildIncremental,
+  listAntigravityTranscripts,
+  parseAntigravityIncremental,
   resolveCodebuddyProjectFiles,
   parseCodebuddyIncremental,
   resolveKiroCliSessionFiles,
@@ -282,6 +284,32 @@ async function cmdSync(argv) {
           );
         },
         source: "gemini",
+      });
+    }
+
+    const antigravityFiles = await listAntigravityTranscripts(geminiHome);
+    let antigravityResult = { filesProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    if (antigravityFiles.length > 0) {
+      if (progress?.enabled) {
+        progress.start(
+          `Parsing Antigravity ${renderBar(0)} 0/${formatNumber(antigravityFiles.length)} files | buckets 0`,
+        );
+      }
+      antigravityResult = await parseAntigravityIncremental({
+        sessionFiles: antigravityFiles,
+        cursors,
+        queuePath,
+        projectQueuePath,
+        onProgress: (p) => {
+          if (!progress?.enabled) return;
+          const pct = p.total > 0 ? p.index / p.total : 1;
+          progress.update(
+            `Parsing Antigravity ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} files | buckets ${formatNumber(
+              p.bucketsQueued,
+            )}`,
+          );
+        },
+        source: "antigravity",
       });
     }
 
@@ -805,6 +833,7 @@ async function cmdSync(argv) {
         openclawResult.filesProcessed +
         claudeResult.filesProcessed +
         geminiResult.filesProcessed +
+        antigravityResult.filesProcessed +
         opencodeResult.filesProcessed +
         cursorResult.recordsProcessed +
         kiroResult.recordsProcessed +
@@ -824,6 +853,7 @@ async function cmdSync(argv) {
         openclawResult.bucketsQueued +
         claudeResult.bucketsQueued +
         geminiResult.bucketsQueued +
+        antigravityResult.bucketsQueued +
         opencodeResult.bucketsQueued +
         cursorResult.bucketsQueued +
         kiroResult.bucketsQueued +

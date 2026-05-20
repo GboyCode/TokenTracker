@@ -28,7 +28,12 @@ const {
   resolveCraftSessionFiles,
   resolveCraftWorkspaceRoots,
   parseGrokBuildIncremental,
+  parseAntigravityIncremental,
+  listAntigravitySessionFiles,
+  estimateAntigravityTokens,
 } = require("../src/lib/rollout");
+
+const antigravityTestTokens = (text) => estimateAntigravityTokens(text || "");
 
 test("parseRolloutIncremental ignores repeated token_count records with unchanged totals", async () => {
   // Codex can repeat the same token_count record in a rollout. The cumulative
@@ -5698,6 +5703,396 @@ test("parseGrokBuildIncremental does not mark zero-token sessions as seen", asyn
     assert.equal(queued.length, 1);
     assert.equal(queued[0].total_tokens, 42);
     assert.deepEqual(cursors.grok.seenSessions, ["grok-session-zero"]);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseAntigravityIncremental bills cumulative context at each planner call", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-"));
+  try {
+    const transcriptPath = path.join(tmp, "transcript.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+
+    const modelSelection = "changed setting `Model Selection` from Auto to Gemini 3.5 Flash.\n";
+    const userA = "u".repeat(40);
+    const modelContentA = modelSelection + userA;
+    const toolResult = "r".repeat(80);
+    const answerA = "a".repeat(20);
+    const thinkingA = "t".repeat(12);
+    const userB = "b".repeat(40);
+    const answerB = "c".repeat(20);
+    const thinkingB = "d".repeat(12);
+
+    const lines = [
+      { type: "USER_INPUT", created_at: "2026-04-05T14:00:00.000Z", content: modelContentA },
+      { type: "TOOL_RESULT", created_at: "2026-04-05T14:01:00.000Z", content: toolResult },
+      {
+        type: "PLANNER_RESPONSE",
+        created_at: "2026-04-05T14:02:00.000Z",
+        content: answerA,
+        thinking: thinkingA,
+      },
+      { type: "USER_INPUT", created_at: "2026-04-05T14:03:00.000Z", content: userB },
+      {
+        type: "PLANNER_RESPONSE",
+        created_at: "2026-04-05T14:04:00.000Z",
+        content: answerB,
+        thinking: thinkingB,
+      },
+    ];
+    await fs.writeFile(transcriptPath, lines.map((line) => JSON.stringify(line)).join("\n"));
+
+    const result = await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(result.eventsAggregated, 2);
+    assert.equal(result.bucketsQueued, 1);
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].source, "antigravity");
+    assert.equal(queued[0].model, "gemini-3.5-flash");
+    const firstInput = antigravityTestTokens(modelContentA) + antigravityTestTokens(toolResult);
+    const secondInput =
+      firstInput + antigravityTestTokens(answerA) + antigravityTestTokens(userB);
+    assert.equal(queued[0].input_tokens, firstInput + secondInput);
+    assert.equal(queued[0].output_tokens, 10);
+    assert.equal(queued[0].reasoning_output_tokens, 6);
+    assert.equal(queued[0].conversation_count, 2);
+    assert.equal(
+      queued[0].total_tokens,
+      queued[0].input_tokens + queued[0].output_tokens + queued[0].reasoning_output_tokens,
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseAntigravityIncremental counts old context for newly appended planner response", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-incremental-"));
+  try {
+    const transcriptPath = path.join(tmp, "transcript.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+
+    const firstLines = [
+      {
+        type: "USER_INPUT",
+        created_at: "2026-04-05T14:00:00.000Z",
+        content:
+          "changed setting `Model Selection` from Auto to Gemini 3.5 Flash.\n" +
+          "u".repeat(40),
+      },
+    ];
+    await fs.writeFile(
+      transcriptPath,
+      firstLines.map((line) => JSON.stringify(line)).join("\n"),
+    );
+
+    const first = await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(first.eventsAggregated, 0);
+
+    const nextLines = [
+      ...firstLines,
+      {
+        type: "PLANNER_RESPONSE",
+        created_at: "2026-04-05T14:02:00.000Z",
+        content: "a".repeat(20),
+      },
+    ];
+    await fs.writeFile(
+      transcriptPath,
+      nextLines.map((line) => JSON.stringify(line)).join("\n"),
+    );
+
+    const second = await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(second.eventsAggregated, 1);
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].model, "gemini-3.5-flash");
+    assert.equal(queued[0].input_tokens, antigravityTestTokens(firstLines[0].content));
+    assert.equal(queued[0].output_tokens, 5);
+    assert.equal(queued[0].total_tokens, queued[0].input_tokens + queued[0].output_tokens);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("listAntigravitySessionFiles discovers transcripts across sibling 2.0 brain dirs", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-brain-dirs-"));
+  try {
+    const legacyTranscript = path.join(
+      tmp,
+      "antigravity",
+      "brain",
+      "session-legacy",
+      ".system_generated",
+      "logs",
+      "transcript.jsonl",
+    );
+    const ideTranscript = path.join(
+      tmp,
+      "antigravity-ide",
+      "brain",
+      "session-ide",
+      ".system_generated",
+      "logs",
+      "transcript.jsonl",
+    );
+    const cliTranscript = path.join(
+      tmp,
+      "antigravity-cli",
+      "brain",
+      "session-cli",
+      ".system_generated",
+      "logs",
+      "transcript.jsonl",
+    );
+    for (const p of [legacyTranscript, ideTranscript, cliTranscript]) {
+      await fs.mkdir(path.dirname(p), { recursive: true });
+      await fs.writeFile(p, "");
+    }
+
+    const dirs = [
+      path.join(tmp, "antigravity", "brain"),
+      path.join(tmp, "antigravity-ide", "brain"),
+      path.join(tmp, "antigravity-cli", "brain"),
+      path.join(tmp, "antigravity-missing", "brain"),
+    ];
+    const results = await Promise.all(dirs.map((d) => listAntigravitySessionFiles(d)));
+    const all = results.flat();
+
+    assert.deepEqual(all.sort(), [cliTranscript, ideTranscript, legacyTranscript].sort());
+    assert.deepEqual(results[3], []);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseAntigravityIncremental does not skip append after trailing newline", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-trailing-newline-"));
+  try {
+    const transcriptPath = path.join(tmp, "transcript.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+
+    const firstLine = {
+      type: "USER_INPUT",
+      created_at: "2026-04-05T14:00:00.000Z",
+      content:
+        "changed setting `Model Selection` from Auto to Gemini 3.5 Flash.\n" +
+        "u".repeat(40),
+    };
+    await fs.writeFile(transcriptPath, `${JSON.stringify(firstLine)}\n`);
+
+    const first = await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(first.eventsAggregated, 0);
+    assert.equal(cursors.files[transcriptPath].lastLine, 1);
+
+    const plannerLine = {
+      type: "PLANNER_RESPONSE",
+      created_at: "2026-04-05T14:02:00.000Z",
+      content: "a".repeat(20),
+    };
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify(firstLine)}\n${JSON.stringify(plannerLine)}\n`,
+    );
+
+    const second = await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(second.eventsAggregated, 1);
+    assert.equal(cursors.files[transcriptPath].lastLine, 2);
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].model, "gemini-3.5-flash");
+    assert.equal(queued[0].input_tokens, antigravityTestTokens(firstLine.content));
+    assert.equal(queued[0].output_tokens, 5);
+    assert.equal(queued[0].total_tokens, queued[0].input_tokens + queued[0].output_tokens);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseAntigravityIncremental does not advance cursor over partial JSON line", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-partial-json-"));
+  try {
+    const transcriptPath = path.join(tmp, "transcript.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    const firstLine = {
+      type: "USER_INPUT",
+      created_at: "2026-04-05T14:00:00.000Z",
+      content: "changed setting `Model Selection` from Auto to Gemini 3.5 Flash.",
+    };
+    const plannerLine = {
+      type: "PLANNER_RESPONSE",
+      created_at: "2026-04-05T14:02:00.000Z",
+      content: "a".repeat(20),
+    };
+
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify(firstLine)}\n${JSON.stringify(plannerLine).slice(0, -4)}`,
+    );
+    const first = await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(first.eventsAggregated, 0);
+    assert.equal(cursors.files[transcriptPath].lastLine, 1);
+
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify(firstLine)}\n${JSON.stringify(plannerLine)}\n`,
+    );
+    const second = await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(second.eventsAggregated, 1);
+    assert.equal(cursors.files[transcriptPath].lastLine, 2);
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].model, "gemini-3.5-flash");
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseAntigravityIncremental uses CJK-aware token estimates", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-cjk-"));
+  try {
+    const transcriptPath = path.join(tmp, "transcript.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    const prompt =
+      "changed setting `Model Selection` from Auto to Gemini 3.5 Flash.\n检查本项目对 antigravity 的用量";
+    const answer = "完成检查";
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: "USER_INPUT",
+          created_at: "2026-04-05T14:00:00.000Z",
+          content: prompt,
+        }),
+        JSON.stringify({
+          type: "PLANNER_RESPONSE",
+          created_at: "2026-04-05T14:02:00.000Z",
+          content: answer,
+        }),
+      ].join("\n"),
+    );
+
+    await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath],
+      cursors,
+      queuePath,
+    });
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].input_tokens, antigravityTestTokens(prompt));
+    assert.equal(queued[0].output_tokens, antigravityTestTokens(answer));
+    assert.ok(queued[0].input_tokens > Math.ceil(prompt.length / 4));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseAntigravityIncremental preserves unknown model as visible usage", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-unknown-model-"));
+  try {
+    const transcriptPath = path.join(tmp, "transcript.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: "USER_INPUT",
+          created_at: "2026-04-05T14:00:00.000Z",
+          content: "regular prompt without model settings",
+        }),
+        JSON.stringify({
+          type: "PLANNER_RESPONSE",
+          created_at: "2026-04-05T14:02:00.000Z",
+          content: "answer",
+        }),
+      ].join("\n"),
+    );
+
+    await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath],
+      cursors,
+      queuePath,
+    });
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].model, "antigravity-unknown");
+    assert.ok(queued[0].total_tokens > 0);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseAntigravityIncremental normalizes non-Flash model settings without defaulting", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-model-settings-"));
+  try {
+    const transcriptPath = path.join(tmp, "transcript.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: "USER_INPUT",
+          created_at: "2026-04-05T14:00:00.000Z",
+          content: "changed setting `Model Selection` from Auto to Claude Haiku 4.6 (Thinking).",
+        }),
+        JSON.stringify({
+          type: "PLANNER_RESPONSE",
+          created_at: "2026-04-05T14:02:00.000Z",
+          content: "answer",
+        }),
+      ].join("\n"),
+    );
+
+    await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath],
+      cursors,
+      queuePath,
+    });
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].model, "claude-haiku-4.6");
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

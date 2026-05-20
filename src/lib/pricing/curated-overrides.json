@@ -34,7 +34,8 @@
     "nemotron-3-super-free":{ "input": 0, "output": 0,   "cache_read": 0 },
     "mimo-v2-pro-free": { "input": 0,    "output": 0,    "cache_read": 0 },
     "minimax-m2.1-free":{ "input": 0,    "output": 0,    "cache_read": 0 },
-    "MiniMax-M2.1":     { "input": 0.5,  "output": 3,    "cache_read": 0.05 }
+    "MiniMax-M2.1":     { "input": 0.5,  "output": 3,    "cache_read": 0.05 },
+    "antigravity-gpt-oss-120b": { "input": 2.5, "output": 10, "cache_read": 0, "note": "Antigravity bridge alias. Approximate with GPT-4o-class pricing until Google exposes route-specific billing metadata." }
   },
   "alias": {
     "auto": "composer-1"

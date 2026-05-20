@@ -78,6 +78,38 @@ test("buildFleetData returns model ids for stable keys", async () => {
   assert.equal(fleetData[0].models[0].id, "gpt-4o");
 });
 
+test("buildFleetData uses explicit per-model cost instead of proportional source allocation", async () => {
+  const mod = await loadDashboardModule("dashboard/src/lib/model-breakdown.ts");
+  const buildFleetData = mod.buildFleetData;
+
+  const modelBreakdown = {
+    sources: [
+      {
+        source: "antigravity",
+        totals: { billable_total_tokens: 143_140_984, total_cost_usd: "43.260712" },
+        models: [
+          {
+            model: "gemini-3.5-flash",
+            model_id: "gemini-3.5-flash",
+            totals: { billable_total_tokens: 143_100_440, total_cost_usd: "43.185541" },
+          },
+          {
+            model: "gemini-3.1-pro",
+            model_id: "gemini-3.1-pro",
+            totals: { billable_total_tokens: 40_544, total_cost_usd: "0.075171" },
+          },
+        ],
+      },
+    ],
+  };
+
+  const fleetData = buildFleetData(modelBreakdown);
+
+  assert.equal(fleetData[0].usd, 43.260712);
+  assert.equal(fleetData[0].models[0].cost, 43.185541);
+  assert.equal(fleetData[0].models[1].cost, 0.075171);
+});
+
 test("buildTopModels aggregates by model name across sources", async () => {
   const mod = await loadDashboardModule("dashboard/src/lib/model-breakdown.ts");
   const buildTopModels = mod.buildTopModels;

@@ -1129,11 +1129,12 @@ function parseProcessLine(line) {
 
 function isAntigravityCommandLine(command) {
   const lower = String(command || "").toLowerCase();
-  return lower.includes("language_server_macos")
+  return lower.includes("language_server")
     && (
       (lower.includes("--app_data_dir") && lower.includes("antigravity"))
       || lower.includes("/antigravity/")
       || lower.includes("\\antigravity\\")
+      || lower.includes("--override_ide_name antigravity")
     );
 }
 

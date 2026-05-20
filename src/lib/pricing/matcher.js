@@ -28,6 +28,37 @@ function stripReasoningSuffix(model) {
   return model;
 }
 
+function normalizeAntigravityModel(model) {
+  if (!model || typeof model !== "string") return model;
+  let lower = model
+    .trim()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\b(thinking|xhigh|high|medium|low|fast)\b/gi, " ")
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+  lower = stripReasoningSuffix(lower);
+
+  if (lower.startsWith("gemini-claude-") || lower.startsWith("gemini-gpt-")) {
+    lower = lower.substring(7);
+  }
+
+  if (/^gemini-3\.\d+-flash-lite/.test(lower)) return "gemini-2.5-flash-lite";
+  if (/^gemini-3\.\d+-flash/.test(lower)) return "gemini-2.5-flash";
+  if (/^gemini-3\.\d+-pro/.test(lower)) return "gemini-2.5-pro";
+  if (/^claude-(sonnet|opus|haiku)-4\.\d+/.test(lower)) {
+    return lower.replace(/^claude-(sonnet|opus|haiku)-4\.(\d+)/, "claude-$1-4-$2");
+  }
+  if (lower.startsWith("gpt-oss-120b")) return "antigravity-gpt-oss-120b";
+
+  return lower;
+}
+
+function shouldNormalizeAntigravity(source) {
+  return typeof source === "string" && source.toLowerCase() === "antigravity";
+}
+
 // Memoise the sorted-by-length LiteLLM key list. Reverse-substring scan walks
 // this once per uncached model; ~2k keys × negligible per-iteration cost, but
 // computing the sort on every call would add up across a sync.
@@ -41,28 +72,31 @@ function getSortedKeys(litellm) {
   return cached;
 }
 
-function lookupPricing(model, { curated, litellm }) {
+function lookupPricing(model, { curated, litellm, source } = {}) {
   if (!model || typeof model !== "string") {
     return { hit: false, source: "empty", value: null };
   }
-  const lower = model.toLowerCase();
+  const lookupModel = shouldNormalizeAntigravity(source)
+    ? normalizeAntigravityModel(model)
+    : model;
+  const lower = lookupModel.toLowerCase();
 
   // 1. CURATED exact
-  if (curated.exact && curated.exact[model]) {
-    return { hit: true, source: "curated:exact", value: curated.exact[model] };
+  if (curated.exact && curated.exact[lookupModel]) {
+    return { hit: true, source: "curated:exact", value: curated.exact[lookupModel] };
   }
 
   // 2. LiteLLM exact
-  if (litellm && litellm[model]) {
-    return { hit: true, source: "litellm:exact", value: litellm[model] };
+  if (litellm && litellm[lookupModel]) {
+    return { hit: true, source: "litellm:exact", value: litellm[lookupModel] };
   }
 
   // 3. CURATED alias (literal mapping like "auto" -> "composer-1")
-  if (curated.alias && curated.alias[model] && curated.exact[curated.alias[model]]) {
+  if (curated.alias && curated.alias[lookupModel] && curated.exact[curated.alias[lookupModel]]) {
     return {
       hit: true,
       source: "curated:alias",
-      value: curated.exact[curated.alias[model]],
+      value: curated.exact[curated.alias[lookupModel]],
     };
   }
 
@@ -78,8 +112,8 @@ function lookupPricing(model, { curated, litellm }) {
 
   // 5. LiteLLM suffix-strip
   if (litellm) {
-    const stripped = stripReasoningSuffix(model);
-    if (stripped !== model && litellm[stripped]) {
+    const stripped = stripReasoningSuffix(lookupModel);
+    if (stripped !== lookupModel && litellm[stripped]) {
       return { hit: true, source: "litellm:strip", value: litellm[stripped] };
     }
   }
@@ -144,6 +178,7 @@ function buildLitellmPerMillionMap(rawData) {
 module.exports = {
   lookupPricing,
   stripReasoningSuffix,
+  normalizeAntigravityModel,
   convertLitellmEntry,
   buildLitellmPerMillionMap,
 };
