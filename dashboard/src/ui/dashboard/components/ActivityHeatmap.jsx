@@ -2,7 +2,8 @@ import React, { useMemo, useRef, useEffect, useState } from "react";
 import { buildActivityHeatmap } from "../../../lib/activity-heatmap";
 import { copy } from "../../../lib/copy";
 import { useTheme } from "../../../hooks/useTheme.js";
-import { formatCompactNumber } from "../../../lib/format";
+import { useCurrency } from "../../../hooks/useCurrency.js";
+import { formatCompactNumber, formatUsdCurrency } from "../../../lib/format";
 import { ActivityHeatmap3D, PALETTES, getAITooltipMessage } from "./ActivityHeatmap3D";
 import { Maximize2, RotateCcw, X, Flame, Terminal, TrendingUp, Info, Play, Pause } from "lucide-react";
 
@@ -104,6 +105,7 @@ export function ActivityHeatmap({
   hideLegend = false,
 }) {
   const { resolvedTheme } = useTheme();
+  const { currency, rate } = useCurrency();
   const isDark = resolvedTheme === "dark";
   const heatmapColors = isDark ? HEATMAP_COLORS_DARK : HEATMAP_COLORS_LIGHT;
   const scrollRef = useRef(null);
@@ -382,7 +384,12 @@ export function ActivityHeatmap({
 
     // 取得年度总消耗费用（后端提供精准计算，前端针对 Mock 数据或历史缓存做备用估算兜底）
     const rawCost = heatmap?.total_cost_usd;
-    const totalCostUsd = rawCost != null ? Number(rawCost) : (totalTokens / 1500000.0);
+    const parsedCost = Number(rawCost);
+    const hasUsableCost =
+      rawCost != null &&
+      (typeof rawCost !== "string" || rawCost.trim() !== "") &&
+      Number.isFinite(parsedCost);
+    const totalCostUsd = hasUsableCost ? parsedCost : (totalTokens / 1500000.0);
 
     return {
       totalTokens,
@@ -395,6 +402,11 @@ export function ActivityHeatmap({
       totalCostUsd,
     };
   }, [weeks, heatmap?.total_cost_usd]);
+
+  const estimatedCostLabel = useMemo(
+    () => formatUsdCurrency(stats.totalCostUsd, { currency, rate }),
+    [stats.totalCostUsd, currency, rate],
+  );
 
   const dayLabels =
     weekStartsOn === "mon"
@@ -651,7 +663,7 @@ export function ActivityHeatmap({
                     {copy("heatmap.3d.modal.stats.estimated_cost")}
                   </span>
                   <span className="text-xl font-black text-zinc-900 dark:text-zinc-50 tracking-tight font-mono transition-transform duration-200 group-hover:-translate-y-[1px]">
-                    {"$" + stats.totalCostUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {estimatedCostLabel}
                   </span>
                 </div>
 
@@ -885,7 +897,7 @@ export function ActivityHeatmap({
                   <div className="text-[10px] font-semibold text-oai-gray-400 dark:text-oai-gray-500 uppercase tracking-wider">
                     Model Breakdown
                   </div>
-                  <div className="flex flex-col gap-2 max-h-[150px] overflow-y-auto pr-1.5 scrollbar-thin">
+                  <div className="flex flex-col gap-2 max-h-[150px] overflow-y-auto pr-1.5 oai-scrollbar">
                     {Object.entries(hoveredCell.models)
                       .map(([name, val]) => ({ name, val: Number(val) }))
                       .sort((a, b) => b.val - a.val)
@@ -939,28 +951,6 @@ export function ActivityHeatmap({
       )}
 
       <style>{`
-        .scrollbar-thin::-webkit-scrollbar {
-          width: 4px;
-          height: 4px;
-        }
-        .scrollbar-thin::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .scrollbar-thin::-webkit-scrollbar-thumb {
-          background: rgba(156, 163, 175, 0.25);
-          border-radius: 9999px;
-          transition: background 0.2s ease;
-        }
-        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-          background: rgba(156, 163, 175, 0.45);
-        }
-        .dark .scrollbar-thin::-webkit-scrollbar-thumb {
-          background: rgba(156, 163, 175, 0.18);
-        }
-        .dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-          background: rgba(156, 163, 175, 0.3);
-        }
-
         @keyframes tt-fade-in {
           from { opacity: 0; }
           to { opacity: 1; }
@@ -1005,4 +995,3 @@ export function ActivityHeatmap({
     </div>
   );
 }
-

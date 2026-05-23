@@ -4,7 +4,9 @@ import { Info, Loader2, SquareArrowOutUpRight } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
 import { Card, Button, Counter } from "../../components";
 import { useTheme } from "../../../hooks/useTheme.js";
+import { useCurrency } from "../../../hooks/useCurrency.js";
 import { copy } from "../../../lib/copy";
+import { CURRENCY_USD, getCurrencySymbol } from "../../../lib/currency";
 import { DateRangePopover, formatDateShort } from "./DateRangePopover.jsx";
 import { ProviderIcon } from "./ProviderIcon.jsx";
 import { formatCompactNumber, formatUsdCurrency } from "../../../lib/format";
@@ -17,11 +19,13 @@ function formatTokens(value) {
   return formatCompactNumber(n, { decimals: 1 });
 }
 
-function formatCost(value) {
+function formatCost(value, currency, rate) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
-  if (n < 0.01) return "<$0.01";
-  return formatUsdCurrency(n.toFixed(2), { decimals: 2 });
+  const symbol = getCurrencySymbol(currency);
+  const converted = currency === CURRENCY_USD ? n : n * rate;
+  if (converted < 0.01) return `<${symbol}0.01`;
+  return formatUsdCurrency(n, { decimals: 2, currency, rate });
 }
 
 function normalizePeriods(periods) {
@@ -134,6 +138,7 @@ export function UsageOverview({
   const showAnimatedSummary = summaryCounterValue != null;
   const [expandedProvider, setExpandedProvider] = useState(null);
   const { resolvedTheme } = useTheme();
+  const { currency, rate } = useCurrency();
   const isDark = resolvedTheme === "dark";
   const gradientFrom = isDark ? "rgba(10,10,10,0.98)" : "rgba(255,255,255,0.96)";
   const gradientTo = isDark ? "rgba(10,10,10,0)" : "rgba(255,255,255,0)";
@@ -320,7 +325,7 @@ export function UsageOverview({
                       provider: provider.label,
                       percent: provider.totalPercent,
                       tokens: formatTokens(provider.usage) || "0",
-                      cost: formatCost(provider.usd) || "$0",
+                      cost: formatCost(provider.usd, currency, rate) || `${getCurrencySymbol(currency)}0`,
                       action: copy(isExpanded ? "usage.overview.collapse" : "usage.overview.expand"),
                     })}
                     onClick={() => setExpandedProvider(isExpanded ? null : provider.label)}
@@ -393,6 +398,7 @@ export function UsageOverview({
 // inline Context Breakdown so the spinner can sit next to the heading instead
 // of taking its own row.
 function ProviderExpandedSection({ provider, color, providerHeading, contextSource, from, to, sortedModels }) {
+  const { currency, rate } = useCurrency();
   const [breakdownLoading, setBreakdownLoading] = useState(false);
   const isAntigravity =
     String(provider?.source || provider?.label || "").trim().toLowerCase() === "antigravity";
@@ -447,7 +453,7 @@ function ProviderExpandedSection({ provider, color, providerHeading, contextSour
                         <div className="space-y-3">
                           {sortedModels.map((model) => {
                             const tokensLabel = formatTokens(model.usage);
-                            const costLabel = formatCost(model.cost);
+                            const costLabel = formatCost(model.cost, currency, rate);
                             const clampedShare = Math.max(0, Math.min(100, Number(model.share) || 0));
                             return (
                               <div key={model.id || model.name}>

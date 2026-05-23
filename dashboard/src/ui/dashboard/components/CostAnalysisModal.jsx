@@ -3,17 +3,21 @@ import { X } from "lucide-react";
 import React, { useMemo } from "react";
 import { copy } from "../../../lib/copy";
 import { formatCompactNumber, formatUsdCurrency, toFiniteNumber } from "../../../lib/format";
+import { useCurrency } from "../../../hooks/useCurrency.js";
+import { CURRENCY_USD, getCurrencySymbol } from "../../../lib/currency";
 
-function formatHeroTotal(value) {
+function formatHeroTotal(value, currency, rate) {
   if (!Number.isFinite(value)) return copy("shared.placeholder.short");
-  const formatted = formatUsdCurrency(value.toFixed(2), { decimals: 2 });
+  const formatted = formatUsdCurrency(value, { decimals: 2, currency, rate });
   return formatted === "-" ? copy("shared.placeholder.short") : formatted;
 }
 
-function formatCostCell(value) {
+function formatCostCell(value, currency, rate) {
   if (!Number.isFinite(value) || value <= 0) return null;
-  if (value < 0.01) return "<$0.01";
-  return formatUsdCurrency(value.toFixed(2), { decimals: 2 });
+  const symbol = getCurrencySymbol(currency);
+  const converted = currency === CURRENCY_USD ? value : value * rate;
+  if (converted < 0.01) return `<${symbol}0.01`;
+  return formatUsdCurrency(value, { decimals: 2, currency, rate });
 }
 
 function formatTokensCell(value) {
@@ -27,6 +31,8 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
   onClose,
   fleetData = [],
 }) {
+  const { currency, rate } = useCurrency();
+
   // Memoized so parent re-renders don't re-walk fleetData each tick
   const normalizedFleet = useMemo(() => {
     return (Array.isArray(fleetData) ? fleetData : [])
@@ -37,7 +43,7 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
         return {
           label: fleet?.label ? String(fleet.label) : "",
           usdValue,
-          usdLabel: formatCostCell(usdValue),
+          costLabel: formatCostCell(usdValue, currency, rate),
           tokensLabel: formatTokensCell(tokenValue),
           models: models
             .map((model) => {
@@ -47,7 +53,7 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
                 id: model?.id ? String(model.id) : "",
                 name: model?.name ? String(model.name) : "",
                 tokensLabel: formatTokensCell(tokens),
-                costLabel: formatCostCell(cost),
+                costLabel: formatCostCell(cost, currency, rate),
                 sortCost: cost,
               };
             })
@@ -57,12 +63,12 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
       })
       .filter((fleet) => fleet.usdValue > 0 || fleet.models.length > 0)
       .sort((a, b) => b.usdValue - a.usdValue);
-  }, [fleetData]);
+  }, [fleetData, currency, rate]);
 
   const totalLabel = useMemo(() => {
     const totalUsd = normalizedFleet.reduce((acc, fleet) => acc + fleet.usdValue, 0);
-    return formatHeroTotal(totalUsd);
-  }, [normalizedFleet]);
+    return formatHeroTotal(totalUsd, currency, rate);
+  }, [normalizedFleet, currency, rate]);
 
   return (
     <Dialog.Root
@@ -75,7 +81,6 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
         <Dialog.Backdrop className="cost-modal-backdrop" data-cost-analysis-backdrop="true" />
         <Dialog.Viewport className="fixed inset-0 z-[101] flex items-center justify-center p-4">
           <Dialog.Popup className="cost-modal-popup relative w-full max-w-[460px] max-h-[calc(100vh-2rem)] flex flex-col rounded-2xl bg-white dark:bg-oai-gray-950 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.25)] dark:shadow-[0_20px_60px_-10px_rgba(0,0,0,0.65)] ring-1 ring-oai-gray-200 dark:ring-oai-gray-800 overflow-hidden">
-            {/* Modal purpose — visually hidden, announced by screen readers */}
             <Dialog.Title
               render={<h2 className="sr-only" />}
             >
@@ -90,11 +95,8 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
               <X size={16} strokeWidth={2} aria-hidden />
             </Dialog.Close>
 
-            {/* Single scroll area wraps hero + list so all content shares one
-                padding context and one scrollbar gutter — no alignment drift. */}
             <div className="flex-1 min-h-0 overflow-y-auto oai-scrollbar">
               <div className="px-3 py-6">
-                {/* Hero */}
                 <p className="text-label uppercase tracking-[0.12em] text-oai-gray-500 dark:text-oai-gray-400 mb-2">
                   {copy("dashboard.cost_breakdown.total_label")}
                 </p>
@@ -105,14 +107,12 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
                   {totalLabel}
                 </p>
 
-                {/* Fleet list — semantic ARIA table */}
                 {normalizedFleet.length === 0 ? (
                   <p className="text-body-sm text-oai-gray-500 dark:text-oai-gray-400">
                     No spend recorded.
                   </p>
                 ) : (
                   <div role="table" aria-label={copy("dashboard.cost_breakdown.title")}>
-                  {/* Column headers */}
                   <div
                     role="row"
                     className="flex items-center justify-between gap-4 py-2 mb-2 border-b border-oai-gray-200 dark:border-oai-gray-800 text-label uppercase text-oai-gray-500 dark:text-oai-gray-400"
@@ -130,7 +130,6 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
                         aria-labelledby={rowGroupId}
                         className={index > 0 ? "mt-5" : "mt-2"}
                       >
-                        {/* Provider row */}
                         <div
                           role="row"
                           className="flex items-center justify-between gap-4 py-2"
@@ -146,11 +145,10 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
                             role="cell"
                             className="shrink-0 text-body-sm font-semibold text-oai-black dark:text-oai-white tabular-nums leading-none"
                           >
-                            {fleet.usdLabel || "—"}
+                            {fleet.costLabel || "—"}
                           </span>
                         </div>
 
-                        {/* Model rows */}
                         {fleet.models.map((model, mi) => (
                           <div
                             key={model.id || `${model.name}-${mi}`}

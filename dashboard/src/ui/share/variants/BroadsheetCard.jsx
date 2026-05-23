@@ -35,7 +35,7 @@ const HEATMAP_PALETTE = [
 export function BroadsheetCard({ data }) {
   const issueLabel = formatIssueLabel(data);
   const heroNumber = formatTokens(data.totalTokens);
-  const costLabel = formatCost(data.totalCost);
+  const costLabel = formatCost(data.totalCost, { currency: data.currency, rate: data.exchangeRate });
   const startLabel = formatShortDate(data.startDate);
   const heroSize = heroFontSize(heroNumber, {
     baseSize: 188,

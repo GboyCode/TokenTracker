@@ -23,15 +23,44 @@ enum TokenFormatter {
         }
     }
 
-    /// Formats a cost value as USD with 2 decimal places. Example: 1.5 -> "$1.50"
-    static func formatCost(_ value: Double) -> String {
-        String(format: "$%.2f", value)
+    /// Symbol + rate are pushed by the dashboard via NativeBridge. Swift never
+    /// hardcodes per-currency knowledge — single source of truth lives in
+    /// dashboard/src/lib/currency.ts (`SUPPORTED_CURRENCIES`).
+    /// Defaults below render plain USD when no preference has been pushed yet.
+    static let defaultCurrencySymbol = "$"
+    static let defaultExchangeRate: Double = 1.0
+
+    /// Returns the symbol for the current currency preference. Falls back to "$"
+    /// when no setting has been pushed by the dashboard.
+    static func currentCurrencySymbol() -> String {
+        let stored = UserDefaults.standard.string(forKey: "MenuBarCurrencySymbol")
+        if let stored, !stored.isEmpty { return stored }
+        return defaultCurrencySymbol
     }
 
-    /// Parses a cost string (e.g. "1.234567") and formats as "$1.23". Returns "$0.00" on failure.
+    /// Reads the current USD→target rate. Prefers a rate pushed by the dashboard,
+    /// falls back to 1.0 (USD identity) when none exists or the value is invalid.
+    static func currentExchangeRate() -> Double {
+        if let stored = UserDefaults.standard.object(forKey: "MenuBarExchangeRate") as? Double,
+           stored.isFinite, stored > 0 {
+            return stored
+        }
+        return defaultExchangeRate
+    }
+
+    /// Formats a cost value using the active currency. Example: 1.5 -> "$1.50" (USD)
+    /// or "¥10.80" (CNY @ 7.2) or "€1.38" (EUR @ 0.92).
+    static func formatCost(_ value: Double) -> String {
+        let symbol = currentCurrencySymbol()
+        let rate = currentExchangeRate()
+        return String(format: "\(symbol)%.2f", value * rate)
+    }
+
+    /// Parses a cost string (e.g. "1.234567") and formats per the current currency.
+    /// Returns "<symbol>0.00" on failure.
     static func formatCostFromString(_ value: String?) -> String {
         guard let value, let parsed = Double(value) else {
-            return "$0.00"
+            return "\(currentCurrencySymbol())0.00"
         }
         return formatCost(parsed)
     }

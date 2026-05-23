@@ -202,7 +202,7 @@ export function AnnualReportCard({ data }) {
             <div style={{fontSize:22,color:DIM,marginTop:12}}>{copy("share.card.annual.total_tokens")}</div>
           </div>
           <div style={{...GLASS_SM,borderRadius:22,padding:"28px 16px",textAlign:"center"}}>
-            <div style={{fontFamily:F_NUM,fontSize:52,fontWeight:700,color:WHITE,letterSpacing:"-0.02em",lineHeight:1}}>{formatCost(data.totalCost)}</div>
+            <div style={{fontFamily:F_NUM,fontSize:52,fontWeight:700,color:WHITE,letterSpacing:"-0.02em",lineHeight:1}}>{formatCost(data.totalCost, { currency: data.currency, rate: data.exchangeRate })}</div>
             <div style={{fontSize:22,color:DIM,marginTop:12}}>{copy("share.card.annual.estimated_cost")}</div>
           </div>
         </div>

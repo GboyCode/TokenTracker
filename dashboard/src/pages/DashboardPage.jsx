@@ -12,6 +12,7 @@ import {
 } from "../lib/auth-token";
 import { copy } from "../lib/copy";
 import { useLocale } from "../hooks/useLocale.js";
+import { useCurrency } from "../hooks/useCurrency.js";
 import { getDetailsSortColumns, sortDailyRows } from "../lib/daily";
 import { formatDateUTC, getRangeForPeriod } from "../lib/date-range";
 import { DETAILS_PAGE_SIZE, paginateRows, trimLeadingZeroMonths } from "../lib/details";
@@ -118,6 +119,7 @@ export function DashboardPage({
   signUpUrl = "/sign-up",
 }) {
   const { resolvedLocale } = useLocale();
+  const { currency, rate } = useCurrency();
   const [costModalOpen, setCostModalOpen] = useState(false);
   const [linkCode, setLinkCode] = useState(null);
   const [linkCodeExpiresAt, setLinkCodeExpiresAt] = useState(null);
@@ -1079,11 +1081,10 @@ export function DashboardPage({
     ],
   );
 
-  const summaryCostValue = useMemo(() => {
-    const formatted = formatUsdCurrency(summary?.total_cost_usd);
-    if (!formatted || formatted === "-" || formatted.startsWith("$")) return formatted;
-    return `$${formatted}`;
-  }, [summary?.total_cost_usd]);
+  const summaryCostValue = useMemo(
+    () => formatUsdCurrency(summary?.total_cost_usd, { currency, rate }),
+    [summary?.total_cost_usd, currency, rate],
+  );
   const summaryConversationsValue = useMemo(
     () => summary?.conversation_count ?? null,
     [summary?.conversation_count],
@@ -1111,6 +1112,8 @@ export function DashboardPage({
     heatmap,
     accessToken: typeof accessToken === "string" ? accessToken : null,
     userId: auth?.userId || null,
+    currency,
+    exchangeRate: rate,
   });
   const openShareModal = useCallback(() => setShareModalOpen(true), []);
   const closeShareModal = useCallback(() => setShareModalOpen(false), []);

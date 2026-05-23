@@ -132,6 +132,9 @@ final class NativeBridge {
             "updateBusy": UpdateChecker.shared.isBusy,
             "isSyncing": viewModel?.isSyncing ?? false,
             "locale": NativeLocalization.currentPreference,
+            "currency": UserDefaults.standard.string(forKey: "MenuBarCurrency") ?? "USD",
+            "currencySymbol": UserDefaults.standard.string(forKey: "MenuBarCurrencySymbol") ?? "$",
+            "exchangeRate": UserDefaults.standard.object(forKey: "MenuBarExchangeRate") as? Double ?? 1.0,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
               let json = String(data: data, encoding: .utf8) else { return }
@@ -169,6 +172,34 @@ final class NativeBridge {
             LocalizationObserver.shared.storePreference(value)
             NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
             WidgetCenter.shared.reloadAllTimelines()
+        case "currency":
+            if let str = value as? String {
+                UserDefaults.standard.set(str, forKey: "MenuBarCurrency")
+                NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+        case "currencySymbol":
+            if let str = value as? String, !str.isEmpty {
+                UserDefaults.standard.set(str, forKey: "MenuBarCurrencySymbol")
+                NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+        case "exchangeRate":
+            let rate: Double?
+            if let d = value as? Double {
+                rate = d
+            } else if let n = value as? NSNumber {
+                rate = n.doubleValue
+            } else if let s = value as? String {
+                rate = Double(s)
+            } else {
+                rate = nil
+            }
+            if let rate, rate.isFinite, rate > 0 {
+                UserDefaults.standard.set(rate, forKey: "MenuBarExchangeRate")
+                NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
+                WidgetCenter.shared.reloadAllTimelines()
+            }
         default:
             break
         }

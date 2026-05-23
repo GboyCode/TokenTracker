@@ -390,9 +390,10 @@ final class StatusBarController: NSObject {
         guard let button = statusItem.button else { return }
         let displayItems = buildMenuBarDisplayValues()
 
-        // popover 显示期间冻结 statusItem.length：4 条数据 publisher 与 MenuBarAnimator 帧动画都会
-        // 触发本方法，length 反复重设会让 status item 宽度抖动并把 popover 锚点拖着整体平移。
-        // popover 关闭后由 didCloseNotification 监听器再调一次本方法把宽度对齐到最新值。
+        // Freeze statusItem.length while the popover is shown: stats publishers and
+        // animator frames both call this method, and a flicker in length drags the
+        // popover anchor sideways. The didCloseNotification observer realigns width
+        // after the popover closes.
         let canResizeStatusItem = !popover.isShown
 
         if showStats && !displayItems.isEmpty {

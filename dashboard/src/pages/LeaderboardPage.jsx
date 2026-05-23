@@ -23,6 +23,8 @@ import { isAccessTokenReady, resolveAuthAccessTokenWithRetry } from "../lib/auth
 import { copy } from "../lib/copy";
 import { toDisplayNumber } from "../lib/format";
 import { cn } from "../lib/cn";
+import { useCurrency } from "../hooks/useCurrency.js";
+import { CURRENCY_USD, getCurrencySymbol } from "../lib/currency";
 import {
   buildPageItems,
   clampInt,
@@ -69,12 +71,14 @@ function readStoredPageSize() {
   return DEFAULT_PAGE_SIZE;
 }
 
-function formatCost(value) {
+function formatCost(value, currency, rate) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return "-";
-  if (n >= 1000) return `$${Math.round(n).toLocaleString()}`;
-  if (n >= 10) return `$${Math.round(n)}`;
-  return `$${n.toFixed(2)}`;
+  const symbol = getCurrencySymbol(currency);
+  const converted = currency === CURRENCY_USD ? n : n * rate;
+  if (converted >= 1000) return `${symbol}${Math.round(converted).toLocaleString()}`;
+  if (converted >= 10) return `${symbol}${Math.round(converted)}`;
+  return `${symbol}${converted.toFixed(2)}`;
 }
 
 function leaderboardTokenCells(entry, isMe, orderedColumns) {
@@ -225,6 +229,7 @@ export function LeaderboardPage({
   const navigate = useNavigate();
   const { openLoginModal } = useLoginModal();
   const { signedIn: cloudSignedIn, loading: authLoading, user: cloudUser } = useInsforgeAuth();
+  const { currency, rate } = useCurrency();
   const leaderboardBaseUrl = useMemo(() => getLeaderboardBaseUrl(), []);
   const mockEnabled = isMockEnabled();
   const authTokenAllowed = signedIn && !sessionSoftExpired;
@@ -518,7 +523,7 @@ export function LeaderboardPage({
                       {toDisplayNumber(entry?.total_tokens)}
                     </td>
                     <td className="px-4 py-4 font-medium text-oai-brand-600 dark:text-oai-brand-400 whitespace-nowrap text-right tabular-nums bg-oai-brand-50 dark:bg-oai-brand-900/10" title="Based on estimated API pricing, not actual billing">
-                      {formatCost(entry?.estimated_cost_usd)}
+                      {formatCost(entry?.estimated_cost_usd, currency, rate)}
                     </td>
                     {leaderboardTokenCells(entry, true, orderedColumns)}
                   </tr>
@@ -548,7 +553,7 @@ export function LeaderboardPage({
                     {toDisplayNumber(entry?.total_tokens)}
                   </td>
                   <td className="px-4 py-4 text-oai-gray-500 dark:text-oai-gray-400 whitespace-nowrap text-right tabular-nums bg-white dark:bg-oai-gray-950 group-hover:bg-oai-gray-50 dark:group-hover:bg-oai-gray-900/60" title="Based on estimated API pricing, not actual billing">
-                    {formatCost(entry?.estimated_cost_usd)}
+                    {formatCost(entry?.estimated_cost_usd, currency, rate)}
                   </td>
                   {leaderboardTokenCells(entry, false, orderedColumns)}
                 </tr>

@@ -1,5 +1,6 @@
 import { toFiniteNumber } from "../../lib/format";
 import { copy } from "../../lib/copy";
+import { getCurrencySymbol } from "../../lib/currency";
 
 type AnyRec = Record<string, any>;
 
@@ -34,6 +35,8 @@ export interface ShareCardData {
   heatmapTotalDays: number;
   heatmapActiveDays: number;
   capturedAt: string;
+  currency: string;
+  exchangeRate: number;
 }
 
 function coerceNumber(value: unknown): number {
@@ -93,6 +96,8 @@ export function buildShareCardData(params: {
   periodTo: string | null;
   heatmap?: AnyRec | null;
   capturedAt?: string;
+  currency?: string;
+  exchangeRate?: number;
 }): ShareCardData {
   const {
     handle,
@@ -106,6 +111,8 @@ export function buildShareCardData(params: {
     periodTo,
     heatmap,
     capturedAt,
+    currency,
+    exchangeRate,
   } = params;
 
   const totalTokens = pickBillable(summary);
@@ -138,6 +145,10 @@ export function buildShareCardData(params: {
     heatmapTotalDays: hm.totalDays,
     heatmapActiveDays: hm.activeDays,
     capturedAt: capturedAt || new Date().toISOString(),
+    currency: typeof currency === "string" && currency.length > 0 ? currency.toUpperCase() : "USD",
+    exchangeRate: Number.isFinite(exchangeRate as number) && (exchangeRate as number) > 0
+      ? (exchangeRate as number)
+      : 1,
   };
 }
 
@@ -198,10 +209,17 @@ export function formatTokens(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
 
-export function formatCost(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "$0.00";
-  if (n >= 1000) return `$${Math.round(n).toLocaleString("en-US")}`;
-  return `$${n.toFixed(2)}`;
+export function formatCost(
+  n: number,
+  options: { currency?: string; rate?: number } = {},
+): string {
+  const { currency = "USD", rate = 1 } = options;
+  const symbol = getCurrencySymbol(currency);
+  if (!Number.isFinite(n) || n <= 0) return `${symbol}0.00`;
+  const converted =
+    currency !== "USD" && Number.isFinite(rate) && rate > 0 ? n * rate : n;
+  if (converted >= 1000) return `${symbol}${Math.round(converted).toLocaleString("en-US")}`;
+  return `${symbol}${converted.toFixed(2)}`;
 }
 
 // Social-share "verbal hook" — a single quotable line derived from the data.

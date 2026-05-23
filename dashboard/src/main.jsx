@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { InsforgeAuthProvider } from "./contexts/InsforgeAuthContext.jsx";
 import { LocaleProvider } from "./ui/foundation/LocaleProvider.jsx";
+import { CurrencyProvider } from "./ui/foundation/CurrencyProvider.jsx";
 import App from "./App.jsx";
 import "@fontsource/geist-mono/400.css";
 import "@fontsource/geist-mono/500.css";
@@ -17,9 +18,11 @@ const router = createBrowserRouter([
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <LocaleProvider>
-      <InsforgeAuthProvider>
-        <RouterProvider router={router} />
-      </InsforgeAuthProvider>
+      <CurrencyProvider>
+        <InsforgeAuthProvider>
+          <RouterProvider router={router} />
+        </InsforgeAuthProvider>
+      </CurrencyProvider>
     </LocaleProvider>
   </React.StrictMode>,
 );

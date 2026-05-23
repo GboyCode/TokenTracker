@@ -21,6 +21,8 @@ interface UseShareCardDataParams {
   heatmap: any;
   accessToken: string | null;
   userId: string | null;
+  currency?: string;
+  exchangeRate?: number;
 }
 
 export function useShareCardData(params: UseShareCardDataParams): ShareCardData {
@@ -37,9 +39,12 @@ export function useShareCardData(params: UseShareCardDataParams): ShareCardData 
     heatmap,
     accessToken,
     userId,
+    currency,
+    exchangeRate,
   } = params;
 
   const [rank, setRank] = useState<number | null>(null);
+  const rate = exchangeRate;
 
   useEffect(() => {
     if (!enabled) return;
@@ -87,6 +92,8 @@ export function useShareCardData(params: UseShareCardDataParams): ShareCardData 
         periodFrom,
         periodTo,
         heatmap,
+        currency,
+        exchangeRate: typeof rate === "number" ? rate : undefined,
       }),
     [
       handle,
@@ -99,6 +106,8 @@ export function useShareCardData(params: UseShareCardDataParams): ShareCardData 
       periodFrom,
       periodTo,
       heatmap,
+      currency,
+      rate,
     ],
   );
 }

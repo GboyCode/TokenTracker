@@ -257,5 +257,17 @@
   "settings.appearance.language.hint": "使用“系统”时会默认跟随本机语言。",
   "settings.appearance.language.system": "系统",
   "settings.appearance.language.english": "英语",
-  "settings.appearance.language.chinese": "简体中文"
+  "settings.appearance.language.chinese": "简体中文",
+  "settings.appearance.currency.label": "货币",
+  "settings.appearance.currency.hint": "选择用量成本的显示币种。",
+  "settings.appearance.currency.opt.usd": "美元 ($)",
+  "settings.appearance.currency.opt.eur": "欧元 (€)",
+  "settings.appearance.currency.opt.gbp": "英镑 (£)",
+  "settings.appearance.currency.opt.cny": "人民币 (¥)",
+  "settings.appearance.currency.opt.jpy": "日元 (¥)",
+  "settings.appearance.currency.opt.hkd": "港币 (HK$)",
+  "settings.appearance.currency.rate_source.default": "内置默认汇率",
+  "settings.appearance.currency.rate_source.fetched": "数据源：open.er-api.com",
+  "settings.appearance.currency.rate_updated": "更新于 {{when}}",
+  "settings.appearance.currency.rate_never": "尚未刷新"
 }

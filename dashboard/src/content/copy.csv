@@ -315,6 +315,18 @@ settings.appearance.theme.hint,ui,SettingsPage,SettingsPage,theme_hint,"Choose h
 settings.appearance.theme.light,ui,SettingsPage,SettingsPage,theme_light,"Light",,active
 settings.appearance.theme.dark,ui,SettingsPage,SettingsPage,theme_dark,"Dark",,active
 settings.appearance.theme.system,ui,SettingsPage,SettingsPage,theme_system,"System",,active
+settings.appearance.currency.label,ui,SettingsPage,SettingsPage,currency_label,"Currency",,active
+settings.appearance.currency.hint,ui,SettingsPage,SettingsPage,currency_hint,"Select the display currency for usage costs.",,active
+settings.appearance.currency.opt.usd,ui,SettingsPage,SettingsPage,currency_opt_usd,"USD ($)",,active
+settings.appearance.currency.opt.eur,ui,SettingsPage,SettingsPage,currency_opt_eur,"EUR (€)",,active
+settings.appearance.currency.opt.gbp,ui,SettingsPage,SettingsPage,currency_opt_gbp,"GBP (£)",,active
+settings.appearance.currency.opt.cny,ui,SettingsPage,SettingsPage,currency_opt_cny,"CNY (¥)",,active
+settings.appearance.currency.opt.jpy,ui,SettingsPage,SettingsPage,currency_opt_jpy,"JPY (¥)",,active
+settings.appearance.currency.opt.hkd,ui,SettingsPage,SettingsPage,currency_opt_hkd,"HKD (HK$)",,active
+settings.appearance.currency.rate_source.default,ui,SettingsPage,SettingsPage,rate_source_default,"Bundled default rate",,active
+settings.appearance.currency.rate_source.fetched,ui,SettingsPage,SettingsPage,rate_source_fetched,"Source: open.er-api.com",,active
+settings.appearance.currency.rate_updated,ui,SettingsPage,SettingsPage,rate_updated,"updated {{when}}",,active
+settings.appearance.currency.rate_never,ui,SettingsPage,SettingsPage,rate_never,"awaiting first refresh",,active
 settings.account.displayName,ui,SettingsPage,SettingsPage,display_name,"Display name",,active
 settings.account.edit,ui,SettingsPage,SettingsPage,edit,"Edit",,active
 settings.account.save,ui,SettingsPage,SettingsPage,save,"Save",,active
