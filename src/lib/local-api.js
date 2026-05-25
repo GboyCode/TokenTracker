@@ -882,7 +882,19 @@ function createLocalApiHandler({ queuePath }) {
         const targetUrl = `${insforgeBase.replace(/\/$/, "")}${p}${url.search || ""}`;
         const proxyHeaders = {};
         for (const [key, value] of Object.entries(req.headers)) {
-          if (key === "host" || key === "connection") continue;
+          // Skip headers undici/fetch manages internally. Forwarding the
+          // inbound content-length (which describes the request body received
+          // here, not what we're about to send) causes undici to throw
+          // UND_ERR_INVALID_ARG "invalid content-length header" on every POST,
+          // turning every /api/auth/* mutation into a 502 — bug present since
+          // this relay was introduced and surfaced after Node updates made
+          // undici stricter about forbidden headers.
+          if (
+            key === "host" ||
+            key === "connection" ||
+            key === "content-length" ||
+            key === "transfer-encoding"
+          ) continue;
           proxyHeaders[key] = value;
         }
         const hasClientCookie = normalizeCookieHeader(proxyHeaders["cookie"]).trim().length > 0;

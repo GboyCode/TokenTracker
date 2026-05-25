@@ -26,6 +26,19 @@ const _initialSearch = typeof window !== "undefined" ? window.location.search : 
 const _initialParams = new URLSearchParams(_initialSearch);
 const _capturedCode = _initialParams.get("insforge_code") || _initialParams.get("code") || null;
 
+// WebView self-detection. The InsForge OAuth provider redirect_uri is
+// http://localhost:7680/auth/callback, which is served by the same local
+// server for BOTH the system browser and the embedded WKWebView. They race
+// on /api/auth-bridge/verifier (one-time read), and whichever GETs first
+// flips the flag to false. We must NEVER let the WebView ask the server
+// "are you native?" — it already knows it is, and asking would either
+// poison the flag for the browser (if WebView wins) or be poisoned by the
+// browser (the cause of issue "登录未完成" — bug introduced in commit
+// 6a92ebfd, 2026-03-30, with the original native OAuth implementation).
+const _isWebViewNative =
+  typeof window !== "undefined" &&
+  Boolean(window.webkit?.messageHandlers?.nativeOAuth);
+
 export function NativeAuthCallbackPage() {
   useLocale();
   const { loading, signedIn } = useInsforgeAuth();
@@ -34,10 +47,21 @@ export function NativeAuthCallbackPage() {
   const [isNative, setIsNative] = useState(null); // null = checking, true/false = determined
   const checkedRef = useRef(false);
 
-  // Step 1: Check with local server if this is a native OAuth flow
+  // Step 1: Decide flow type.
+  //   - WebView (the macOS app): we ARE the destination; go straight to web
+  //     flow so the InsForge SDK exchanges the code using the PKCE verifier
+  //     that's already in sessionStorage. Do NOT touch the server-side flag,
+  //     so the system browser's one read still returns native:true.
+  //   - System browser: ask the server whether this callback originated
+  //     from a native sign-in (WebView PUT native:true before launching).
   useEffect(() => {
     if (!_capturedCode || checkedRef.current) return;
     checkedRef.current = true;
+
+    if (_isWebViewNative) {
+      setIsNative(false);
+      return;
+    }
 
     (async () => {
       try {
@@ -73,7 +97,7 @@ export function NativeAuthCallbackPage() {
 
     const timer = setTimeout(() => {
       if (!signedIn) setStatus("failed");
-    }, 5000);
+    }, 12000);
     return () => clearTimeout(timer);
   }, [isNative, loading, signedIn, navigate]);
 
