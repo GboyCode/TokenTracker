@@ -76,6 +76,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let code {
                     DashboardWindowController.shared.handleAuthCallback(code: code)
                 }
+            } else if url.host == "open" || url.host == "dashboard" {
+                // The web app's local-only pages (Limits / Skills on
+                // tokentracker.cc) deep-link here via tokentracker://open to
+                // surface the local dashboard window.
+                DashboardWindowController.shared.showWindow()
             }
         }
     }
