@@ -265,5 +265,9 @@
   "leaderboard.profile_modal.heatmap.title": "活跃度（最近 365 天）",
   "leaderboard.profile_modal.providers.title": "按 Provider 分布",
   "leaderboard.profile_modal.providers.none": "本周期无使用数据。",
-  "leaderboard.profile_modal.view_full": "查看完整主页"
+  "leaderboard.profile_modal.view_full": "查看完整主页",
+  "local_only.title": "请在客户端内使用",
+  "local_only.body": "这个页面读取的是你本机上的数据，所以只能在 Mac app 或命令行 dashboard 里查看。",
+  "local_only.open_app": "在 Mac app 内打开",
+  "local_only.download": "下载 Mac app"
 }

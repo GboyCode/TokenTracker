@@ -784,3 +784,7 @@ leaderboard.profile_modal.heatmap.title,dashboard,LeaderboardProfileModal,Heatma
 leaderboard.profile_modal.providers.title,dashboard,LeaderboardProfileModal,Providers,title,"By provider",,active
 leaderboard.profile_modal.providers.none,dashboard,LeaderboardProfileModal,Providers,none,"No usage this period.",,active
 leaderboard.profile_modal.view_full,dashboard,LeaderboardProfileModal,Footer,view_full,"View full profile",,active
+local_only.title,dashboard,LocalOnlyNotice,LocalOnlyNotice,title,"Available in the app",,active
+local_only.body,dashboard,LocalOnlyNotice,LocalOnlyNotice,body,"This page reads data from your own machine, so it only works in the Mac app or the CLI dashboard.",,active
+local_only.open_app,dashboard,LocalOnlyNotice,LocalOnlyNotice,open_app,"Open in Mac app",,active
+local_only.download,dashboard,LocalOnlyNotice,LocalOnlyNotice,download,"Get the Mac app",,active

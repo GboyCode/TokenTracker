@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { Select } from "@base-ui/react/select";
+import { LocalOnlyNotice } from "../components/LocalOnlyNotice.jsx";
+import { isMockEnabled } from "../lib/mock-data";
+
+const IS_LOCAL_HOST =
+  typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 import {
   Check,
   ChevronDown,
@@ -615,6 +621,18 @@ export function SkillsPage() {
     const next = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
     window.history.replaceState({}, "", next);
   }, [tab]);
+
+  // Skills are scanned from local directories (~/.claude/skills etc.) by the
+  // CLI — there's no cloud source. On the deployed web app, surface the
+  // local-only notice instead of an empty list. (Placed after all hooks so
+  // hook order stays stable across renders.)
+  if (!IS_LOCAL_HOST && !isMockEnabled()) {
+    return (
+      <div className="flex flex-col flex-1 text-oai-black dark:text-oai-white font-oai antialiased">
+        <LocalOnlyNotice />
+      </div>
+    );
+  }
 
   const runMutation = async (key, task) => {
     setBusyKey(key);

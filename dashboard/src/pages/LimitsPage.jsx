@@ -6,10 +6,27 @@ import { useLimitsDisplayPrefs } from "../hooks/use-limits-display-prefs.js";
 import { copy } from "../lib/copy";
 import { LimitsPageSkeleton } from "../components/LimitsPageSkeleton.jsx";
 import { UsageLimitsPanel } from "../ui/dashboard/components/UsageLimitsPanel.jsx";
+import { LocalOnlyNotice } from "../components/LocalOnlyNotice.jsx";
+import { isMockEnabled } from "../lib/mock-data";
+
+const IS_LOCAL_HOST =
+  typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
 export function LimitsPage() {
   const { data: usageLimits, error, isLoading } = useUsageLimits({ initialRefresh: true });
   const prefs = useLimitsDisplayPrefs();
+
+  // Limits read the local plan/rate-limit tier from the machine running the
+  // CLI; there's no cloud source. On the deployed web app, surface the
+  // local-only notice instead of an empty panel.
+  if (!IS_LOCAL_HOST && !isMockEnabled()) {
+    return (
+      <div className="flex flex-col flex-1 text-oai-black dark:text-oai-white font-oai antialiased">
+        <LocalOnlyNotice />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col flex-1 text-oai-black dark:text-oai-white font-oai antialiased">

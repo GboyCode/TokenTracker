@@ -10,8 +10,18 @@ import { copy } from "../lib/copy";
 // External trace endpoints (claude.ai, 1.1.1.1) stay direct — CORS-enabled.
 // DNS leak detection hits *.d.ip.net.coffee directly so the resolver query
 // reaches ip.net.coffee's authoritative DNS.
-
-const PROXY = "/proxy/ipcheck";
+//
+// On the deployed web app (tokentracker.cc) there's no local CLI proxy. We hit
+// ip.net.coffee directly instead: its /api/* endpoints send
+// `access-control-allow-origin: *`, and — crucially — a direct browser fetch
+// exits from the visitor's own IP, so the probe still reports the user's real
+// IP (a cloud proxy would report the server's IP, which is useless here).
+// `/claude/status.json` lacks CORS; that one call degrades gracefully (the
+// page already wraps every fetch in try/catch + timeout).
+const IPCHECK_IS_LOCAL =
+  typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+const PROXY = IPCHECK_IS_LOCAL ? "/proxy/ipcheck" : "https://ip.net.coffee";
 const IP_HISTORY_KEY = "claude_ip_history";
 const IP_HISTORY_MAX = 6;
 
