@@ -6,6 +6,7 @@ import { getDashboardEntryPath } from "../../lib/host-mode";
 import { HeaderGithubStar } from "../components/HeaderGithubStar.jsx";
 import { InsforgeUserHeaderControls } from "../../components/InsforgeUserHeaderControls.jsx";
 import { useInsforgeAuth } from "../../contexts/InsforgeAuthContext.jsx";
+import { useLoginModal } from "../../contexts/LoginModalContext.jsx";
 import LaserFlow from "./components/LaserFlow.jsx";
 import LightRays from "./components/LightRays.jsx";
 
@@ -83,6 +84,7 @@ export function MarketingLanding({
     typeof window !== "undefined" &&
     (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
   const { signedIn, loading: authLoading } = useInsforgeAuth();
+  const { openLoginModal } = useLoginModal();
 
   const modelAgentLabels = useMemo(
     () => ({
@@ -145,24 +147,53 @@ export function MarketingLanding({
               <HeaderGithubStar />
             </div>
           </div>
-          {isLocalMode && (
-            <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+          <div className="flex items-center justify-end gap-5 sm:gap-6">
+            {/* Leaderboard 纯文字导航链接 */}
+            <Link
+              to="/leaderboard"
+              className="text-sm font-medium text-oai-gray-400 hover:text-white transition-colors duration-200 select-none outline-none focus-visible:underline"
+            >
+              {copy("nav.leaderboard")}
+            </Link>
+
+            {/* 未登录场景下，Open Dashboard 应该作为次级文字导航链接并排展示 */}
+            {(!signedIn && !authLoading) && (
               <Link
                 to={getDashboardEntryPath()}
-                className={cn(
-                  buttonClass(signedIn || authLoading ? "default" : "ghost", "sm"),
-                  "no-underline px-5 rounded-full group",
-                  signedIn || authLoading
-                    ? "shadow-sm ring-1 ring-white/10"
-                    : "ring-1 ring-oai-gray-700",
-                )}
+                className="text-sm font-medium text-oai-gray-400 hover:text-white transition-colors duration-200 select-none outline-none focus-visible:underline"
               >
                 {copy("landing.v2.cta.primary")}
-                <span className="ml-2 inline-block transition-transform duration-200 group-hover:translate-x-0.5">&rarr;</span>
               </Link>
-              <InsforgeUserHeaderControls />
+            )}
+
+            {/* Dashboard / Sign In 按钮及头像区 */}
+            <div className="flex items-center gap-2.5 sm:gap-3.5">
+              {authLoading ? (
+                <div className="h-8 w-16 animate-pulse rounded-[8px] bg-white/10" aria-hidden />
+              ) : signedIn ? (
+                // 已登录：Open Dashboard 升级为主行动实色按钮
+                <>
+                  <Link
+                    to={getDashboardEntryPath()}
+                    className="inline-flex h-8 items-center justify-center rounded-[8px] bg-white px-3.5 text-xs font-bold text-oai-gray-950 hover:bg-oai-gray-100 transition-all duration-200 active:scale-[0.98] shadow-sm select-none"
+                  >
+                    {copy("landing.v2.cta.primary")}
+                  </Link>
+                  {/* 已登录时，优雅挂载头像控件 */}
+                  <InsforgeUserHeaderControls />
+                </>
+              ) : (
+                // 未登录：Sign In 展示为主行动实色按钮，点击唤起 Modal
+                <button
+                  type="button"
+                  onClick={openLoginModal}
+                  className="inline-flex h-8 min-w-[80px] items-center justify-center rounded-[8px] bg-white px-3.5 text-xs font-bold text-oai-gray-950 hover:bg-oai-gray-100 transition-all duration-200 active:scale-[0.98] shadow-sm select-none"
+                >
+                  {copy("header.auth.sign_in_aria")}
+                </button>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </header>
 

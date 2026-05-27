@@ -1,20 +1,21 @@
 {
-  "generatedAt": "2026-05-26T10:32:33.298Z",
+  "generatedAt": "2026-05-27T01:57:49.561Z",
   "root": "dashboard/src",
   "rules": {
     "colors": "hex/rgb(a) literals",
     "rawText": "JSX text nodes containing letters or digits"
   },
   "totals": {
-    "colors": 200,
-    "rawText": 134
+    "colors": 237,
+    "rawText": 145
   },
   "files": {
     "dashboard/src/components/InsforgeUserHeaderControls.jsx": {
       "colors": 0,
-      "rawText": 1,
+      "rawText": 3,
       "rawTextTokens": [
-        ") : avatarUrl ? ("
+        ") : avatarSrc && !avatarFailed ? (",
+        ") : initialsFromName(displayName) === \"?\" ? ("
       ]
     },
     "dashboard/src/components/LeaderboardSummaryCard.jsx": {
@@ -34,6 +35,15 @@
       "colors": 4,
       "rawText": 0,
       "rawTextTokens": []
+    },
+    "dashboard/src/components/leaderboard/LeaderboardProfileModal.jsx": {
+      "colors": 6,
+      "rawText": 3,
+      "rawTextTokens": [
+        "0 && n",
+        "1 && (",
+        "buildHeatmapForModal(heatmap), [heatmap]); const favoriteName = models?.favorite?.model_name; const modelCount = Number(models?.count) || 0; return ("
+      ]
     },
     "dashboard/src/components/settings/AccountSection.jsx": {
       "colors": 0,
@@ -95,9 +105,10 @@
       ]
     },
     "dashboard/src/pages/LeaderboardProfilePage.jsx": {
-      "colors": 0,
-      "rawText": 1,
+      "colors": 2,
+      "rawText": 2,
       "rawTextTokens": [
+        ") : realSignedIn ? (",
         "Token Tracker"
       ]
     },
@@ -193,12 +204,13 @@
     },
     "dashboard/src/ui/dashboard/components/ActivityHeatmap.jsx": {
       "colors": 28,
-      "rawText": 4,
+      "rawText": 5,
       "rawTextTokens": [
         "0 ? (",
         "3D Insight",
         "Model Breakdown",
-        "Tokens"
+        "Tokens",
+        "with position: fixed, so use viewport // coordinates directly. This keeps it visible inside the leaderboard // profile modal, where the Dialog.Popup has both `overflow-hidden` and // a `transform` (from the open/close transition) — that combo clips any // absolute-positioned tooltip rendered inside the modal subtree. const rect = e.currentTarget.getBoundingClientRect(); const viewportWidth = typeof window !== \"undefined\" ? window.innerWidth : 1024; const x = rect.left + rect.width / 2; const y = rect.top; const halfWidth = 140; let shiftX = 0; if (x"
       ]
     },
     "dashboard/src/ui/dashboard/components/ActivityHeatmap3D.jsx": {
@@ -264,10 +276,13 @@
       ]
     },
     "dashboard/src/ui/dashboard/components/TrendMonitor.jsx": {
-      "colors": 1,
-      "rawText": 1,
+      "colors": 30,
+      "rawText": 4,
       "rawTextTokens": [
-        "No data yet"
+        "0 ? (",
+        "No data yet",
+        "Tokens",
+        "sum + s.value, 0); return ("
       ]
     },
     "dashboard/src/ui/dashboard/components/UsageLimitsPanel.jsx": {
@@ -327,9 +342,10 @@
     },
     "dashboard/src/ui/marketing/MarketingLanding.jsx": {
       "colors": 16,
-      "rawText": 2,
+      "rawText": 3,
       "rawTextTokens": [
-        "&rarr;",
+        ") : ( // 未登录：Sign In 展示为主行动实色按钮，点击唤起 Modal",
+        ") : signedIn ? ( // 已登录：Open Dashboard 升级为主行动实色按钮",
         "Token Tracker"
       ]
     },

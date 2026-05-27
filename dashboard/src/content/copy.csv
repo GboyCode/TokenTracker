@@ -93,7 +93,7 @@ landing.v2.models.agent.cursor,landing,LandingPage,MarketingLanding,agent_cursor
 landing.v2.models.agent.gemini,landing,LandingPage,MarketingLanding,agent_gemini,"GEMINI",,active
 landing.v2.models.agent.opencode,landing,LandingPage,MarketingLanding,agent_opencode,"OPENCODE",,active
 landing.v2.models.agent.openclaw,landing,LandingPage,MarketingLanding,agent_openclaw,"OPENCLAW",,active
-landing.v2.cta.primary,landing,LandingPage,MarketingLanding,cta_primary,"Open Dashboard",,active
+landing.v2.cta.primary,landing,LandingPage,MarketingLanding,cta_primary,"Dashboard",,active
 landing.v2.hero.subtagline,landing,LandingPage,MarketingLanding,hero_subtagline,"Automatically monitor token usage across Claude Code, Cursor, Codex, and more. Local-first, privacy-focused, and zero manual configuration.",,active
 
 
@@ -207,7 +207,8 @@ details.pagination.next,dashboard,DashboardPage,DailyTable,pagination_next,"Next
 
 
 
-leaderboard.profile.nav.back,dashboard,LeaderboardProfilePage,Header,nav_back,"$ Leaderboard",,active
+leaderboard.profile.nav.back,dashboard,LeaderboardProfilePage,Header,nav_back,"Leaderboard",,active
+leaderboard.profile.hero.rank_label,dashboard,LeaderboardProfilePage,Hero,rank_label,"Rank",,active
 leaderboard.title,dashboard,LeaderboardPage,LeaderboardPage,title,"Leaderboard",,active
 leaderboard.range,dashboard,LeaderboardPage,LeaderboardPage,range,"UTC {{period}} · {{from}} – {{to}}",,active
 leaderboard.range_loading,dashboard,LeaderboardPage,LeaderboardPage,range_loading,"UTC {{period}} · …",,active

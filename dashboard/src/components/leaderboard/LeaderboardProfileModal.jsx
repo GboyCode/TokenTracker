@@ -101,20 +101,44 @@ const shimmerStyle = `
  * fact list → heatmap → provider list). Same heights as the loaded view
  * to avoid layout shift on resolve.
  */
-export function ProfileSkeleton() {
+export function ProfileSkeleton({ variant = "modal" }) {
   const bar = "rounded bg-oai-gray-200/50 dark:bg-oai-gray-800/40 tt-shimmer-bar";
+  const isPage = variant === "page";
   return (
     <div>
       <style dangerouslySetInnerHTML={{ __html: shimmerStyle }} />
-      <div className="flex items-start gap-4 px-6 pt-6 pb-5 border-b border-oai-gray-200/80 dark:border-oai-gray-800/60 animate-fade-in">
-        <div className="h-14 w-14 rounded-full bg-oai-gray-200/50 dark:bg-oai-gray-800/40 tt-shimmer-bar shrink-0" />
-        <div className="flex-1 min-w-0 space-y-2 pt-1">
-          <div className={cn(bar, "h-4 w-40")} />
-          <div className={cn(bar, "h-3 w-56")} />
+      {isPage ? (
+        <div className="flex items-start gap-5 px-6 sm:px-8 pt-8 pb-7 animate-fade-in">
+          <div className="h-[68px] w-[68px] rounded-full bg-oai-gray-200/50 dark:bg-oai-gray-800/40 tt-shimmer-bar shrink-0" />
+          <div className="flex-1 min-w-0 flex items-start justify-between gap-4 pt-0.5">
+            <div className="min-w-0 space-y-2.5">
+              <div className={cn(bar, "h-7 w-48")} />
+              <div className={cn(bar, "h-3.5 w-32")} />
+            </div>
+            <div className="shrink-0 space-y-1.5 flex flex-col items-end">
+              <div className={cn(bar, "h-2.5 w-8")} />
+              <div className={cn(bar, "h-7 w-12")} />
+            </div>
+          </div>
         </div>
-        <div className={cn(bar, "h-4 w-4 shrink-0 mt-1")} />
-      </div>
-      <div className="px-6 py-5 space-y-6">
+      ) : (
+        <div className="flex items-start gap-4 px-6 pt-6 pb-5 border-b border-oai-gray-200/80 dark:border-oai-gray-800/60 animate-fade-in">
+          <div className="h-14 w-14 rounded-full bg-oai-gray-200/50 dark:bg-oai-gray-800/40 tt-shimmer-bar shrink-0" />
+          <div className="flex-1 min-w-0 space-y-2 pt-1">
+            <div className={cn(bar, "h-4 w-40")} />
+            <div className={cn(bar, "h-3 w-56")} />
+          </div>
+          <div className={cn(bar, "h-4 w-4 shrink-0 mt-1")} />
+        </div>
+      )}
+      <div
+        className={cn(
+          "space-y-6",
+          isPage
+            ? "px-6 sm:px-8 pt-6 pb-8 border-t border-oai-gray-200/80 dark:border-oai-gray-800/60"
+            : "px-6 py-5",
+        )}
+      >
         <div className="grid grid-cols-4 gap-x-6 gap-y-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i}>
@@ -255,6 +279,65 @@ function Header({ user, onClose }) {
   );
 }
 
+/**
+ * Standalone-page hero. The modal `Header` anchors a close button on the right
+ * edge; on the /u/:userId page there's no close button, so reusing it leaves
+ * the right half empty and unbalanced. This hero is built for the page: a
+ * larger avatar, the name as the page's primary heading, and the rank pushed
+ * to the right edge as a deliberate counterweight.
+ */
+function PageHero({ user }) {
+  const handle = extractGithubHandle(user?.github_url);
+  const rank = Number(user?.rank) || 0;
+  const rankTone =
+    rank === 1
+      ? "text-amber-500 dark:text-amber-400"
+      : rank === 2
+        ? "text-slate-500 dark:text-slate-300"
+        : rank === 3
+          ? "text-orange-600 dark:text-orange-400"
+          : "text-oai-gray-400 dark:text-oai-gray-500";
+  return (
+    <div className="flex items-center gap-5 px-6 sm:px-8 pt-8 pb-7">
+      <LeaderboardAvatar
+        avatarUrl={user?.avatar_url}
+        displayName={user?.display_name || ""}
+        seed={user?.user_id || user?.display_name}
+        size="xl"
+        className="shrink-0 ring-1 ring-oai-gray-200 dark:ring-oai-gray-800"
+      />
+      <div className="min-w-0 flex-1 flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="truncate text-2xl sm:text-[28px] font-semibold tracking-tight leading-tight text-oai-black dark:text-white">
+            {user?.display_name || "—"}
+          </h1>
+          {handle ? (
+            <a
+              href={user.github_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-flex items-center gap-1.5 text-sm text-oai-gray-500 dark:text-oai-gray-400 hover:text-oai-gray-900 dark:hover:text-white transition-colors"
+            >
+              <ProviderIcon provider="GITHUB" size={13} />
+              <span>@{handle}</span>
+            </a>
+          ) : null}
+        </div>
+        {rank ? (
+          <div className="shrink-0 text-right leading-none">
+            <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-oai-gray-400 dark:text-oai-gray-500">
+              {copy("leaderboard.profile.hero.rank_label")}
+            </div>
+            <div className={cn("mt-1.5 text-3xl font-black tabular-nums tracking-tight", rankTone)}>
+              {copy("leaderboard.profile_modal.rank", { rank })}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function ProviderList({ data }) {
   const arr = Array.isArray(data) ? data : [];
   if (arr.length === 0) {
@@ -300,7 +383,7 @@ function ProviderList({ data }) {
  * /u/:userId page. `onClose` is optional — when omitted (page mode) the
  * header renders without a close button.
  */
-export function ProfileContent({ data, currency, rate, onClose }) {
+export function ProfileContent({ data, currency, rate, onClose, variant = "modal" }) {
   const {
     user,
     totals,
@@ -311,14 +394,22 @@ export function ProfileContent({ data, currency, rate, onClose }) {
     heatmap,
     period,
   } = data;
+  const isPage = variant === "page";
   const heatmapData = useMemo(() => buildHeatmapForModal(heatmap), [heatmap]);
   const favoriteName = models?.favorite?.model_name;
   const modelCount = Number(models?.count) || 0;
 
   return (
     <>
-      <Header user={user} onClose={onClose} />
-      <div className="flex-1 min-h-0 overflow-y-auto oai-scrollbar px-6 py-5 space-y-6">
+      {isPage ? <PageHero user={user} /> : <Header user={user} onClose={onClose} />}
+      <div
+        className={cn(
+          "space-y-6",
+          isPage
+            ? "px-6 sm:px-8 pt-6 pb-8 border-t border-oai-gray-200/80 dark:border-oai-gray-800/60"
+            : "flex-1 min-h-0 overflow-y-auto oai-scrollbar px-6 py-5",
+        )}
+      >
         {/* Stat strip — flat row, no nested cards */}
         <div className="grid grid-cols-4 gap-x-6 gap-y-4">
           <Stat

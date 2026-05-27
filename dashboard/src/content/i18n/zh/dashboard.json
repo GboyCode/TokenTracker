@@ -247,6 +247,7 @@
   "leaderboard.profile_modal.empty": "这个用户的资料未公开。",
   "leaderboard.profile_modal.row_aria": "查看 {{name}} 的资料",
   "leaderboard.profile_modal.rank": "#{{rank}}",
+  "leaderboard.profile.hero.rank_label": "排名",
   "leaderboard.profile_modal.hero.total_tokens": "总 Token",
   "leaderboard.profile_modal.hero.total_cost": "总花费",
   "leaderboard.profile_modal.hero.github": "GitHub 主页",

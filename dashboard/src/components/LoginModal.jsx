@@ -78,10 +78,13 @@ export function LoginModal() {
   // Load auth config
   useEffect(() => {
     if (!isOpen || !enabled) {
-      setConfigLoading(false);
       return;
     }
+    if (oauthProviders.length > 0) {
+      return; // already loaded
+    }
     let active = true;
+    setConfigLoading(true);
     (async () => {
       const { data, error: cfgErr } = await getPublicAuthConfig();
       if (!active) return;
@@ -98,7 +101,7 @@ export function LoginModal() {
       setConfigLoading(false);
     })();
     return () => { active = false; };
-  }, [isOpen, enabled, getPublicAuthConfig]);
+  }, [isOpen, enabled, getPublicAuthConfig, oauthProviders.length]);
 
   // Close on successful login
   useEffect(() => {
@@ -229,7 +232,10 @@ export function LoginModal() {
             {/* OAuth buttons */}
             <div className="space-y-2.5 mb-5">
               {configLoading ? (
-                <div className="h-10 rounded-lg bg-oai-gray-100 dark:bg-oai-gray-900 animate-pulse" />
+                <div className="space-y-2.5">
+                  <div className="h-10 rounded-lg bg-oai-gray-100 dark:bg-oai-gray-900/50 animate-pulse" />
+                  <div className="h-10 rounded-lg bg-oai-gray-100 dark:bg-oai-gray-900/50 animate-pulse" />
+                </div>
               ) : (
                 oauthProviders.map((p) => (
                   <button

@@ -26,6 +26,7 @@ const SIZE_CLASS = {
   sm: "h-7 w-7 min-h-7 min-w-7 text-[10px]",
   md: "h-8 w-8 min-h-8 min-w-8 text-[11px]",
   lg: "h-14 w-14 min-h-14 min-w-14 text-base",
+  xl: "h-[68px] w-[68px] min-h-[68px] min-w-[68px] text-xl",
 };
 
 /**
