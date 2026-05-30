@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { resolveGrokHome } = require("./grok-hook");
 const { resolveAntigravitySkillDirs } = require("./antigravity-paths");
 
@@ -88,6 +89,51 @@ function discoverCachePath() {
   return path.join(dataDir(), "discover-cache.json");
 }
 
+function activityPath() {
+  return path.join(dataDir(), "activity.jsonl");
+}
+
+const ACTIVITY_MAX = 500;
+
+// Append-only skill activity log, mirroring the queue.jsonl culture: best-effort,
+// auto-capped, latest-wins on read. Privacy: verbs + skill name + targets only —
+// never prompts or file contents. Never throws (logging must not block a mutation).
+function appendActivity(event) {
+  try {
+    ensureDir(dataDir());
+    const record = JSON.stringify({ ts: Date.now(), ...event });
+    fs.appendFileSync(activityPath(), `${record}\n`, { mode: 0o600 });
+    const stat = fs.statSync(activityPath());
+    if (stat.size > 256 * 1024) {
+      const lines = fs.readFileSync(activityPath(), "utf8").split("\n").filter(Boolean).slice(-ACTIVITY_MAX);
+      fs.writeFileSync(activityPath(), `${lines.join("\n")}\n`, { mode: 0o600 });
+    }
+  } catch (_e) {
+    // best-effort
+  }
+}
+
+function readActivity(limit = 100) {
+  try {
+    const raw = fs.readFileSync(activityPath(), "utf8");
+    const lines = raw.split("\n").filter(Boolean);
+    const want = Math.max(1, Math.min(ACTIVITY_MAX, Number(limit) || 100));
+    return lines
+      .slice(-want)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch (_e) {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .reverse();
+  } catch (_e) {
+    return [];
+  }
+}
+
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
@@ -151,16 +197,128 @@ function targetList() {
     }));
 }
 
+// Read a single scalar field from YAML frontmatter. Handles inline values
+// (`key: value`, optionally quoted) AND block scalars (`key: >` / `key: |`, with
+// optional chomping `+`/`-`), where the value lives on the following indented
+// lines. Without block-scalar support, `description: >` skills surfaced their
+// description as a bare ">" or "|" (the block indicator itself).
+function readYamlField(yaml, key) {
+  const lines = String(yaml).split("\n");
+  const header = new RegExp(`^(\\s*)${key}:[ \\t]*(.*)$`);
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = lines[i].match(header);
+    if (!match) continue;
+    const indent = match[1].length;
+    const inline = match[2].trim();
+    if (/^[>|][+-]?$/.test(inline)) {
+      const collected = [];
+      for (let j = i + 1; j < lines.length; j += 1) {
+        if (lines[j].trim() === "") {
+          collected.push("");
+          continue;
+        }
+        const lineIndent = lines[j].match(/^(\s*)/)[1].length;
+        if (lineIndent <= indent) break; // dedent ends the block
+        collected.push(lines[j].trim());
+      }
+      return collected.join(" ");
+    }
+    return inline.replace(/^["']/, "").replace(/["']$/, "");
+  }
+  return "";
+}
+
 function readSkillMetadata(markdown, fallbackName) {
   const raw = String(markdown || "");
   const frontmatter = raw.match(/^---\s*\n([\s\S]*?)\n---/);
   const source = frontmatter ? frontmatter[1] : raw;
-  const nameMatch = source.match(/^name:\s*["']?(.+?)["']?\s*$/m);
-  const descriptionMatch = source.match(/^description:\s*["']?([\s\S]+?)["']?\s*$/m);
+  const name = readYamlField(source, "name") || fallbackName || "Skill";
+  const description = readYamlField(source, "description");
   return {
-    name: (nameMatch?.[1] || fallbackName || "Skill").trim(),
-    description: (descriptionMatch?.[1] || "").replace(/\n\s+/g, " ").trim(),
+    name: name.trim(),
+    description: description.replace(/\s+/g, " ").trim(),
   };
+}
+
+// Skills are marked by SKILL.md (canonical) or skill.md (legacy). Discovery uses
+// a case-insensitive regex, so detection/adoption MUST accept both spellings —
+// otherwise a lowercase skill.md installs but is invisible to the unmanaged scan
+// and to local-skill adoption. Returns the marker's absolute path, or null.
+function findSkillMarker(dir) {
+  for (const name of ["SKILL.md", "skill.md"]) {
+    const candidate = path.join(dir, name);
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch (_e) {
+      // not present under this spelling
+    }
+  }
+  return null;
+}
+
+const HASH_IGNORE = new Set([".git", ".DS_Store", "Thumbs.db", ".gitignore"]);
+
+// Stable content fingerprint of a skill directory: walk files in sorted order,
+// hashing each relative path + exec bit + bytes. Normalization-tolerant
+// (ignores VCS/OS noise) so it answers "did this skill change?" cheaply. Used to
+// record what was installed so checkUpdates() can detect upstream drift.
+function hashDirectory(dir) {
+  const hash = crypto.createHash("sha256");
+  const walk = (relDir) => {
+    const absDir = relDir ? path.join(dir, relDir) : dir;
+    let entries;
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch (_e) {
+      return;
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (HASH_IGNORE.has(entry.name)) continue;
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(rel);
+      } else if (entry.isFile()) {
+        const abs = path.join(dir, rel);
+        let stat;
+        try {
+          stat = fs.statSync(abs);
+        } catch (_e) {
+          continue;
+        }
+        const execBit = process.platform === "win32" ? 0 : stat.mode & 0o111 ? 1 : 0;
+        hash.update(`${rel} ${execBit} `);
+        try {
+          hash.update(fs.readFileSync(abs));
+        } catch (_e) {
+          // unreadable file — fold its absence in deterministically
+        }
+        hash.update(" ");
+      }
+    }
+  };
+  walk("");
+  return hash.digest("hex");
+}
+
+function pathStrictlyWithin(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+// Guard against copying a directory into a DESCENDANT of itself, which makes
+// cpSync recurse infinitely (dst/dst/dst…; issue #61 in the reference manager).
+// Uses literal resolved paths, not realpath: a target that is a symlink pointing
+// back at the SSOT source is a legitimate idempotent re-link (we removePath it
+// before re-creating), not recursion — resolving symlinks here would wrongly
+// reject every re-sync.
+function assertNotNested(source, dest) {
+  const a = path.resolve(source);
+  const b = path.resolve(dest);
+  if (a === b) return; // same literal path = idempotent overwrite, not nesting
+  if (pathStrictlyWithin(a, b) || pathStrictlyWithin(b, a)) {
+    throw new Error("Refusing to sync a skill into its own directory tree");
+  }
 }
 
 async function fetchJson(url) {
@@ -236,6 +394,26 @@ async function getRepoTree(repo) {
   throw lastError || new Error(`Unable to read ${repo.owner}/${repo.name}`);
 }
 
+// Upstream signature for one skill subtree: hash the sorted "path:blobSha" pairs
+// of every file under `sourceDir`. Git blob SHAs change iff content changes, so
+// comparing a stored signature against a freshly fetched tree detects an
+// "update available" using a SINGLE tree API call per repo — no per-file fetch.
+function sourceSignatureFromTree(tree, sourceDir) {
+  if (!Array.isArray(tree) || !sourceDir) return null;
+  const prefix = `${sourceDir}/`;
+  const rels = tree
+    .filter(
+      (entry) =>
+        entry?.type === "blob" &&
+        entry.sha &&
+        (entry.path === sourceDir || String(entry.path || "").startsWith(prefix)),
+    )
+    .map((entry) => `${entry.path}:${entry.sha}`)
+    .sort();
+  if (!rels.length) return null;
+  return crypto.createHash("sha256").update(rels.join("\n")).digest("hex");
+}
+
 function buildSkillKey(skill) {
   return `${skill.repoOwner}/${skill.repoName}:${skill.directory}`;
 }
@@ -259,7 +437,10 @@ async function discoverRepoSkills(repoInput) {
 
   const skills = await mapWithConcurrency(skillFiles, DISCOVER_CONCURRENCY, async (entry) => {
     const docPath = entry.path.replace(/\\/g, "/");
-    const directory = docPath.endsWith("/SKILL.md") ? docPath.slice(0, -"/SKILL.md".length) : repo.name;
+    // Strip the marker case-insensitively (SKILL.md or legacy skill.md) so a
+    // lowercase-marker repo derives the right directory instead of falling
+    // through to repo.name — mirrors findSkillMarker() on the local side.
+    const directory = docPath.replace(/(^|\/)(?:SKILL|skill)\.md$/i, "") || repo.name;
     const installName = installNameFromDirectory(directory || repo.name);
     if (!installName) return null;
     let metadata = { name: installName, description: "" };
@@ -351,6 +532,7 @@ function isSymlink(targetPath) {
 }
 
 function copyDir(source, dest) {
+  assertNotNested(source, dest);
   removePath(dest);
   fs.cpSync(source, dest, { recursive: true, force: true });
 }
@@ -362,6 +544,7 @@ function syncSkillToTarget(directory, targetId) {
   if (!fs.existsSync(source)) throw new Error(`Managed skill not found: ${directory}`);
   for (const baseDir of targetDirs(target)) {
     const dest = path.join(baseDir, directory);
+    assertNotNested(source, dest);
     ensureDir(path.dirname(dest));
     removePath(dest);
     try {
@@ -390,14 +573,39 @@ function scanTargetSkill(directory, targetId) {
   return false;
 }
 
+// Disk truth for one (skill, target): "synced" (present + resolvable),
+// "orphan" (a dangling symlink whose SSOT source was deleted), or "off".
+// Powers the tri-state agent dots so the UI never claims a skill is synced when
+// its link is broken. For multi-dir targets, the healthiest state wins.
+function classifyTargetSkill(directory, targetId) {
+  const target = TARGETS[targetId];
+  if (!target) return "off";
+  let state = "off";
+  for (const baseDir of targetDirs(target)) {
+    const candidate = path.join(baseDir, directory);
+    if (fs.existsSync(candidate)) return "synced";
+    if (isSymlink(candidate)) state = "orphan";
+  }
+  return state;
+}
+
 function listInstalledSkills() {
   purgeExpiredTrash();
   const registry = readRegistry();
   const managed = registry.skills
     .filter((skill) => !skill.trashedAt)
     .map((skill) => {
-      const targets = Object.keys(TARGETS).filter((id) => scanTargetSkill(skill.directory, id));
-      return { ...skill, managed: true, targets };
+      const intended = new Set(skill.targets || []);
+      const targetStates = {};
+      const targets = [];
+      for (const id of Object.keys(TARGETS)) {
+        let state = classifyTargetSkill(skill.directory, id);
+        // Registry says it should be synced here, but disk lost it → orphan.
+        if (state === "off" && intended.has(id)) state = "orphan";
+        targetStates[id] = state;
+        if (state === "synced") targets.push(id);
+      }
+      return { ...skill, managed: true, targets, targetStates };
     });
 
   const managedDirs = new Set(managed.map((skill) => skill.directory.toLowerCase()));
@@ -414,8 +622,8 @@ function listInstalledSkills() {
         if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
         const directory = entry.name;
         if (!directory || directory.startsWith(".") || managedDirs.has(directory.toLowerCase())) continue;
-        const skillPath = path.join(dir, directory, "SKILL.md");
-        if (!fs.existsSync(skillPath)) continue;
+        const skillPath = findSkillMarker(path.join(dir, directory));
+        if (!skillPath) continue;
         const metadata = readSkillMetadata(fs.readFileSync(skillPath, "utf8"), directory);
         const key = directory.toLowerCase();
         if (!unmanaged.has(key)) {
@@ -432,11 +640,15 @@ function listInstalledSkills() {
             installedAt: null,
             managed: false,
             targets: [],
+            // Complete map (all agents default "off") so the frontend can trust
+            // targetStates as the single source of truth — same shape as managed.
+            targetStates: Object.fromEntries(Object.keys(TARGETS).map((id) => [id, "off"])),
             targetPaths: {},
           });
         }
         const skill = unmanaged.get(key);
         if (!skill.targets.includes(target.id)) skill.targets.push(target.id);
+        skill.targetStates[target.id] = "synced";
         if (!skill.targetPaths[target.id]) skill.targetPaths[target.id] = path.join(dir, directory);
       }
     }
@@ -504,7 +716,8 @@ async function installSkill(skillInput, targetIds = ["claude", "codex"]) {
     throw error;
   }
 
-  const skillMd = fs.readFileSync(path.join(dest, "SKILL.md"), "utf8");
+  const skillMarker = findSkillMarker(dest);
+  const skillMd = skillMarker ? fs.readFileSync(skillMarker, "utf8") : "";
   const metadata = readSkillMetadata(skillMd, skill.name || installName);
   const selectedTargets = targetIds.filter((id) => TARGETS[id]);
   const installed = {
@@ -519,6 +732,9 @@ async function installSkill(skillInput, targetIds = ["claude", "codex"]) {
     repoName: skill.repoName,
     repoBranch: branch,
     installedAt: Date.now(),
+    // Fingerprints power idempotent reinstall + the "update available" badge.
+    contentHash: hashDirectory(dest),
+    sourceSignature: sourceSignatureFromTree(tree, sourceDir),
     targets: selectedTargets,
   };
 
@@ -527,6 +743,7 @@ async function installSkill(skillInput, targetIds = ["claude", "codex"]) {
   saveRegistry(registry);
 
   for (const id of selectedTargets) syncSkillToTarget(installName, id);
+  appendActivity({ action: "install", name: installed.name, directory: installName, targets: selectedTargets, source: `${skill.repoOwner}/${skill.repoName}` });
   return { ...installed, managed: true, targets: selectedTargets };
 }
 
@@ -552,6 +769,7 @@ function uninstallSkill(id) {
       registry.skills = [...others, skill];
       saveRegistry(registry);
       purgeExpiredTrash();
+      appendActivity({ action: "uninstall", name: skill.name, directory: skill.directory });
       return { ok: true, trashed: true, restoreId: skill.id, ttlMs: TRASH_TTL_MS };
     } catch (_e) {
       removePath(ssotPath);
@@ -559,6 +777,7 @@ function uninstallSkill(id) {
   }
   registry.skills = registry.skills.filter((entry) => entry.id !== skill.id);
   saveRegistry(registry);
+  appendActivity({ action: "uninstall", name: skill.name, directory: skill.directory });
   return { ok: true, trashed: false };
 }
 
@@ -601,6 +820,7 @@ function restoreSkill(id) {
   delete skill.previousTargets;
   saveRegistry(registry);
   for (const targetId of targets) syncSkillToTarget(skill.directory, targetId);
+  appendActivity({ action: "restore", name: skill.name, directory: skill.directory, targets });
   return { ...skill, managed: true, targets };
 }
 
@@ -615,6 +835,7 @@ function setSkillTargets(id, targetIds) {
   }
   skill.targets = selectedTargets;
   saveRegistry(registry);
+  appendActivity({ action: "set_targets", name: skill.name, directory: skill.directory, targets: selectedTargets });
   return { ...skill, managed: true, targets: selectedTargets };
 }
 
@@ -624,8 +845,7 @@ function findLocalSkillSource(directory) {
   for (const target of Object.values(TARGETS)) {
     for (const baseDir of targetDirs(target)) {
       const skillPath = path.join(baseDir, installName);
-      const docPath = path.join(skillPath, "SKILL.md");
-      if (fs.existsSync(docPath)) {
+      if (findSkillMarker(skillPath)) {
         return { path: skillPath, targetId: target.id };
       }
     }
@@ -650,7 +870,8 @@ function importLocalSkill(directory, targetIds = []) {
 
   const dest = path.join(ssotDir(), installName);
   copyDir(source.path, dest);
-  const metadata = readSkillMetadata(fs.readFileSync(path.join(dest, "SKILL.md"), "utf8"), installName);
+  const skillMarker = findSkillMarker(dest);
+  const metadata = readSkillMetadata(skillMarker ? fs.readFileSync(skillMarker, "utf8") : "", installName);
   const discoveredTargets = Object.keys(TARGETS).filter((targetId) => scanTargetSkill(installName, targetId));
   const selectedTargets = (targetIds.length ? targetIds : discoveredTargets).filter((targetId) => TARGETS[targetId]);
   const skill = {
@@ -665,6 +886,7 @@ function importLocalSkill(directory, targetIds = []) {
     repoName: null,
     repoBranch: null,
     installedAt: Date.now(),
+    contentHash: hashDirectory(dest),
     targets: selectedTargets,
   };
 
@@ -674,6 +896,7 @@ function importLocalSkill(directory, targetIds = []) {
     if (selectedTargets.includes(targetId)) syncSkillToTarget(installName, targetId);
     else removeSkillFromTarget(installName, targetId);
   }
+  appendActivity({ action: "import", name: skill.name, directory: installName, targets: selectedTargets });
   return { ...skill, managed: true, targets: selectedTargets };
 }
 
@@ -682,6 +905,7 @@ function deleteLocalSkill(directory, targetIds = []) {
   if (!installName) throw new Error("Invalid skill directory");
   const selectedTargets = targetIds.length ? targetIds : Object.keys(TARGETS);
   for (const targetId of selectedTargets) removeSkillFromTarget(installName, targetId);
+  appendActivity({ action: "delete_local", directory: installName, targets: selectedTargets });
   return { ok: true };
 }
 
@@ -752,18 +976,152 @@ async function searchSkillsSh(query, limit = 20, offset = 0) {
   };
 }
 
+const UPDATE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour — bounds GitHub tree calls
+const UPDATE_CHECK_CONCURRENCY = 2;
+
+function updateCachePath() {
+  return path.join(dataDir(), "updates-cache.json");
+}
+
+// Compare each managed GitHub/skills.sh skill's stored source signature against a
+// freshly fetched repo tree. One tree call per repo (skills from the same repo
+// share it), concurrency-limited and cached for an hour so a background check
+// can't trip GitHub's unauthenticated rate limit. Returns { updates: {id:bool} }.
+// Read-only: never mutates the registry or the on-disk skills.
+async function checkUpdates({ force = false } = {}) {
+  const registry = readRegistry();
+  const managed = registry.skills.filter(
+    (skill) => !skill.trashedAt && skill.repoOwner && skill.repoName && skill.sourceSignature,
+  );
+  const fingerprint = managed
+    .map((skill) => `${skill.id}@${skill.sourceSignature}`)
+    .sort()
+    .join("|");
+
+  if (!force) {
+    const cached = readJson(updateCachePath(), null);
+    if (
+      cached &&
+      cached.fingerprint === fingerprint &&
+      Number.isFinite(cached.checkedAt) &&
+      Date.now() - cached.checkedAt < UPDATE_CACHE_TTL_MS &&
+      cached.updates &&
+      typeof cached.updates === "object"
+    ) {
+      return { updates: cached.updates, checkedAt: cached.checkedAt, cached: true };
+    }
+  }
+
+  const byRepo = new Map();
+  for (const skill of managed) {
+    const branch = skill.repoBranch || "main";
+    const key = `${skill.repoOwner}/${skill.repoName}@${branch}`.toLowerCase();
+    if (!byRepo.has(key)) {
+      byRepo.set(key, { owner: skill.repoOwner, name: skill.repoName, branch, skills: [] });
+    }
+    byRepo.get(key).skills.push(skill);
+  }
+
+  const updates = {};
+  await mapWithConcurrency(Array.from(byRepo.values()), UPDATE_CHECK_CONCURRENCY, async (repo) => {
+    let tree;
+    try {
+      ({ tree } = await getRepoTree(repo));
+    } catch (error) {
+      if (error instanceof RateLimitError) throw error;
+      return; // leave this repo's skills as unknown (omitted)
+    }
+    for (const skill of repo.skills) {
+      const signature = sourceSignatureFromTree(tree, skill.sourceDirectory || skill.directory);
+      if (signature) updates[skill.id] = signature !== skill.sourceSignature;
+    }
+  });
+
+  const checkedAt = Date.now();
+  writeJson(updateCachePath(), { fingerprint, checkedAt, updates });
+  return { updates, checkedAt, cached: false };
+}
+
+// skills.sh exposes only /api/search (no leaderboard endpoint), so "Popular" is
+// built honestly on top of it: fan a handful of broad seed queries, merge by
+// skill key keeping the highest install count, sort by installs. Cached for 6h.
+const POPULAR_SEED_QUERIES = [
+  "agent",
+  "code",
+  "test",
+  "review",
+  "git",
+  "web",
+  "design",
+  "data",
+  "docs",
+  "python",
+  "api",
+  "deploy",
+];
+const POPULAR_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+function popularCachePath() {
+  return path.join(dataDir(), "popular-cache.json");
+}
+
+async function fetchPopularSkillsSh({ force = false, limit = 60 } = {}) {
+  const cap = Math.max(1, Math.min(200, Number(limit) || 60));
+  if (!force) {
+    const cached = readJson(popularCachePath(), null);
+    if (
+      cached &&
+      Array.isArray(cached.skills) &&
+      Number.isFinite(cached.generatedAt) &&
+      Date.now() - cached.generatedAt < POPULAR_CACHE_TTL_MS
+    ) {
+      return { skills: cached.skills.slice(0, cap), cached: true, generatedAt: cached.generatedAt };
+    }
+  }
+
+  const lists = await mapWithConcurrency(POPULAR_SEED_QUERIES, DISCOVER_CONCURRENCY, async (q) => {
+    try {
+      return (await searchSkillsSh(q, 30, 0)).skills;
+    } catch (error) {
+      if (error instanceof RateLimitError) throw error;
+      return [];
+    }
+  });
+
+  const byKey = new Map();
+  for (const list of lists) {
+    for (const skill of list) {
+      const key = String(skill.key || `${skill.repoOwner}/${skill.repoName}:${skill.directory}`).toLowerCase();
+      const prev = byKey.get(key);
+      if (!prev || (skill.installs || 0) > (prev.installs || 0)) byKey.set(key, skill);
+    }
+  }
+  const skills = Array.from(byKey.values())
+    .sort((a, b) => (b.installs || 0) - (a.installs || 0))
+    .slice(0, 200);
+  writeJson(popularCachePath(), { generatedAt: Date.now(), skills });
+  return { skills: skills.slice(0, cap), cached: false, generatedAt: Date.now() };
+}
+
 module.exports = {
   addRepo,
+  assertNotNested,
+  checkUpdates,
   discoverSkills,
   deleteLocalSkill,
+  fetchPopularSkillsSh,
+  findSkillMarker,
+  hashDirectory,
   importLocalSkill,
   installSkill,
   listInstalledSkills,
   listRepos,
+  readActivity,
   removeRepo,
   restoreSkill,
   searchSkillsSh,
   setSkillTargets,
+  sourceSignatureFromTree,
   targetList,
   uninstallSkill,
 };

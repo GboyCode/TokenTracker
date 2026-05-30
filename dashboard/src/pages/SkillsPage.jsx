@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { Select } from "@base-ui/react/select";
 import { LocalOnlyNotice } from "../components/LocalOnlyNotice.jsx";
@@ -8,11 +8,13 @@ const IS_LOCAL_HOST =
   typeof window !== "undefined" &&
   (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 import {
+  ArrowUpCircle,
   Check,
   ChevronDown,
   ChevronRight,
   Download,
   ExternalLink,
+  Flame,
   Loader2,
   Plus,
   RefreshCw,
@@ -22,15 +24,19 @@ import {
 } from "lucide-react";
 import { Button, Card, ConfirmModal, DismissibleHint, Input } from "../ui/components";
 import { ProviderIcon } from "../ui/dashboard/components/ProviderIcon.jsx";
+import { showToast } from "../ui/components/Toast.jsx";
 import { SkillDetailPanel } from "./SkillDetailPanel.jsx";
 import { copy } from "../lib/copy";
 import { cn } from "../lib/cn";
 import {
   addSkillRepo,
+  checkSkillUpdates,
   deleteLocalSkill,
   discoverSkills,
   getInstalledSkills,
+  getPopularSkills,
   getSkillRepos,
+  getSkillUsage,
   importLocalSkill,
   installSkill,
   removeSkillRepo,
@@ -41,6 +47,7 @@ import {
 } from "../lib/skills-api";
 
 const DEFAULT_TARGETS = ["claude", "codex"];
+const SOURCE_POPULAR = "popular";
 const TARGET_CHIP_ICON_CLASSES = {
   claude: "text-orange-500 dark:text-orange-300",
   codex: "text-emerald-600 dark:text-emerald-300",
@@ -69,38 +76,73 @@ function targetBusyKey(skillId, targetId) {
   return `target:${skillId}:${targetId}`;
 }
 
-function TargetChip({ target }) {
+// Tri-state agent dot: synced (colored, ringed), off (muted), orphan (amber —
+// the registry says it's synced here but the on-disk copy vanished). Click
+// toggles; clicking an orphan re-syncs. Stops propagation so it never opens the
+// row's detail panel.
+function AgentDot({ target, state, busy, onToggle }) {
+  const synced = state === "synced";
+  const orphan = state === "orphan";
+  const label = orphan
+    ? copy("skills.dot.orphan_aria", { agent: target.label })
+    : synced
+      ? copy("skills.dot.synced_aria", { agent: target.label })
+      : copy("skills.dot.off_aria", { agent: target.label });
   return (
-    <span className="inline-flex h-6 items-center gap-1.5 rounded-full bg-oai-gray-100 px-2 text-[11px] font-medium text-oai-gray-700 ring-1 ring-oai-gray-200/70 dark:bg-oai-gray-800/70 dark:text-oai-gray-200 dark:ring-oai-gray-700/70">
-      <span className={cn("flex h-3.5 w-3.5 items-center justify-center", TARGET_CHIP_ICON_CLASSES[target.id])} aria-hidden>
-        <ProviderIcon provider={target.id} size={14} />
-      </span>
-      {target.label}
-    </span>
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={synced}
+      disabled={busy}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle?.(target.id, !synced);
+      }}
+      className="relative flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-oai-gray-100 focus:outline-none focus:ring-2 focus:ring-oai-gray-400/40 disabled:cursor-not-allowed dark:hover:bg-oai-gray-800/60"
+    >
+      {busy ? (
+        <Loader2 className="h-4 w-4 animate-spin text-oai-gray-400" aria-hidden />
+      ) : (
+        <span
+          className={cn(
+            "flex h-[18px] w-[18px] items-center justify-center transition",
+            // synced + orphan stay full-color (recognizable); off fades out.
+            synced && TARGET_CHIP_ICON_CLASSES[target.id],
+            !synced && !orphan && "opacity-35 grayscale",
+          )}
+          aria-hidden
+        >
+          <ProviderIcon provider={target.id} size={18} />
+        </span>
+      )}
+      {orphan && !busy ? (
+        <span
+          className="absolute -bottom-px -right-px h-2 w-2 rounded-full bg-amber-500 ring-2 ring-oai-white dark:ring-oai-gray-900"
+          aria-hidden
+        />
+      ) : null}
+    </button>
   );
 }
 
-function TargetChipRow({ skill, targets }) {
-  const activeIds = new Set(skill.targets || []);
-  const synced = targets.filter((t) => activeIds.has(t.id));
-  if (!synced.length) {
-    return (
-      <span className="text-xs italic text-oai-gray-500 dark:text-oai-gray-400">
-        {copy("skills.target.synced_none")}
-      </span>
-    );
-  }
-  const summary = synced.map((t) => t.label).join(", ");
+function AgentDots({ skill, targets, onToggleTarget, busyKey }) {
   return (
-    <div className="flex flex-wrap gap-1" aria-label={copy("skills.target.synced_summary", { targets: summary })}>
-      {synced.map((target) => (
-        <TargetChip key={target.id} target={target} />
+    <div className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
+      {targets.map((target) => (
+        <AgentDot
+          key={target.id}
+          target={target}
+          state={skill.targetStates?.[target.id] || "off"}
+          busy={busyKey === targetBusyKey(skill.id, target.id)}
+          onToggle={(targetId, enabled) => onToggleTarget?.(skill, targetId, enabled)}
+        />
       ))}
     </div>
   );
 }
 
-function SkillRow({ skill, targets, selected, onSelect }) {
+function SkillRow({ skill, targets, selected, onSelect, selectable, checked, onToggleSelect, onToggleTarget, hasUpdate, busyKey }) {
   const sourceLabel =
     skill.repoOwner && skill.repoName ? `${skill.repoOwner}/${skill.repoName}` : null;
   const titleAttr = sourceLabel ? `${skill.directory} · ${sourceLabel}` : skill.directory;
@@ -122,34 +164,55 @@ function SkillRow({ skill, targets, selected, onSelect }) {
       onClick={() => onSelect?.(skill)}
       onKeyDown={handleKeyDown}
       className={cn(
-        "flex cursor-pointer flex-col gap-3 rounded-md px-3 py-3 transition focus:outline-none focus:ring-2 focus:ring-oai-gray-400/30 lg:flex-row lg:items-center lg:gap-4",
+        "cursor-pointer rounded-md py-3 pr-2 transition focus:outline-none focus:ring-2 focus:ring-oai-gray-400/30",
         selected
           ? "bg-oai-gray-100 ring-1 ring-oai-gray-200 dark:bg-oai-gray-800/60 dark:ring-oai-gray-800"
-          : "hover:bg-oai-gray-50 dark:hover:bg-oai-gray-900/40",
+          : checked
+            ? "bg-oai-gray-50 dark:bg-oai-gray-900/40"
+            : "hover:bg-oai-gray-50 dark:hover:bg-oai-gray-900/40",
       )}
     >
-      <div className="min-w-0 flex-1" title={titleAttr}>
-        <h2 className="truncate text-sm font-semibold text-oai-black dark:text-white">
+      {/* Title line: checkbox + name + badge + agent dots + chevron all on one
+          centered row so the checkbox aligns with the title, not the taller
+          title+description block. Description sits below, indented under the name. */}
+      <div className="flex items-center gap-3">
+        {selectable ? (
+          <label className="flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(event) => onToggleSelect?.(skill, event.target.checked)}
+              aria-label={copy("skills.select.row_aria", { name: skill.name || skill.directory })}
+              className="h-4 w-4 rounded border-oai-gray-300 text-oai-black focus:ring-oai-gray-400 dark:border-oai-gray-600 dark:bg-oai-gray-900 dark:text-white"
+            />
+          </label>
+        ) : null}
+        <h2
+          className="min-w-0 flex-1 truncate text-sm font-semibold text-oai-black dark:text-white"
+          title={titleAttr}
+        >
           {skill.name || skill.directory}
         </h2>
-        {skill.description ? (
-          <p className="mt-0.5 line-clamp-2 text-xs text-oai-gray-500 dark:text-oai-gray-400">
-            {skill.description}
-          </p>
+        {hasUpdate ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 ring-1 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-800/60">
+            <ArrowUpCircle className="h-2.5 w-2.5" aria-hidden />
+            {copy("skills.update.badge")}
+          </span>
         ) : null}
+        <AgentDots skill={skill} targets={targets} onToggleTarget={onToggleTarget} busyKey={busyKey} />
+        <ChevronRight
+          className={cn(
+            "hidden h-4 w-4 shrink-0 text-oai-gray-300 transition-colors dark:text-oai-gray-600 lg:block",
+            selected && "text-oai-gray-500 dark:text-oai-gray-300",
+          )}
+          aria-hidden
+        />
       </div>
-
-      <div className="flex items-center gap-2 lg:gap-3">
-        <TargetChipRow skill={skill} targets={targets} />
-      </div>
-
-      <ChevronRight
-        className={cn(
-          "hidden h-4 w-4 shrink-0 text-oai-gray-300 transition-colors dark:text-oai-gray-600 lg:block",
-          selected && "text-oai-gray-500 dark:text-oai-gray-300",
-        )}
-        aria-hidden
-      />
+      {skill.description ? (
+        <p className={cn("mt-1 line-clamp-2 text-xs text-oai-gray-500 dark:text-oai-gray-400", selectable && "pl-7")}>
+          {skill.description}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -164,7 +227,7 @@ function FilterToolbar({
   onClearFilters,
 }) {
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-2 px-1 pt-1 text-xs text-oai-gray-600 dark:text-oai-gray-300">
+    <div className="mb-2 flex flex-wrap items-center gap-2 pt-1 text-xs text-oai-gray-600 dark:text-oai-gray-300">
       <Select.Root value={agentFilter} onValueChange={onAgentFilter}>
         <Select.Trigger
           aria-label={copy("skills.filter.agent_label")}
@@ -234,6 +297,66 @@ function FilterToolbar({
   );
 }
 
+// Batch toolbar — appears only when a selection exists. Capability-gated: the
+// bulk-sync popover and remove button act on every selected skill at once.
+function BatchToolbar({ count, targets, busy, onBulkSync, onBulkRemove, onClear }) {
+  return (
+    <div
+      role="toolbar"
+      aria-label={copy("skills.select.toolbar_aria")}
+      className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-oai-gray-200 bg-oai-gray-50 px-3 py-2 dark:border-oai-gray-800 dark:bg-oai-gray-900/50"
+    >
+      <span className="text-xs font-medium text-oai-gray-700 dark:text-oai-gray-200" aria-live="polite">
+        {copy("skills.select.count", { count })}
+      </span>
+      <div className="ml-auto flex items-center gap-2">
+        <Popover.Root>
+          <Popover.Trigger
+            disabled={busy}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-oai-gray-200 bg-oai-white px-2.5 text-xs font-medium text-oai-gray-700 transition hover:border-oai-gray-300 focus:outline-none focus:ring-2 focus:ring-oai-gray-400/30 disabled:opacity-60 dark:border-oai-gray-800 dark:bg-oai-gray-900 dark:text-oai-gray-200"
+          >
+            <Download className="h-3.5 w-3.5" aria-hidden />
+            {copy("skills.select.bulk_sync")}
+            <ChevronDown className="h-3 w-3" aria-hidden />
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Positioner sideOffset={6} side="bottom" align="end" className="!z-[80]">
+              <Popover.Popup className="min-w-[200px] rounded-lg bg-white p-1.5 shadow-lg ring-1 ring-oai-gray-200 dark:bg-oai-gray-950 dark:ring-oai-gray-800">
+                <div className="px-2 pb-1 pt-0.5 text-[11px] font-medium uppercase tracking-wide text-oai-gray-500 dark:text-oai-gray-400">
+                  {copy("skills.select.bulk_sync_hint")}
+                </div>
+                {targets.map((target) => (
+                  <button
+                    key={target.id}
+                    type="button"
+                    onClick={() => onBulkSync(target.id)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-oai-black hover:bg-oai-gray-100 dark:text-white dark:hover:bg-oai-gray-800"
+                  >
+                    <ProviderIcon provider={target.id} size={16} />
+                    <span className="flex-1">{target.label}</span>
+                  </button>
+                ))}
+              </Popover.Popup>
+            </Popover.Positioner>
+          </Popover.Portal>
+        </Popover.Root>
+        <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onBulkRemove}>
+          <Trash2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {copy("skills.select.bulk_remove")}
+        </Button>
+        <button
+          type="button"
+          onClick={onClear}
+          className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-medium text-oai-gray-500 transition hover:text-oai-black focus:outline-none focus:ring-2 focus:ring-oai-gray-400/30 dark:text-oai-gray-400 dark:hover:text-white"
+        >
+          <XIcon className="h-3 w-3" aria-hidden />
+          {copy("skills.select.clear")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MySkillsView({
   items,
   totalCount,
@@ -245,18 +368,38 @@ function MySkillsView({
   onClearFilters,
   selectedId,
   onSelect,
+  onToggleTarget,
+  busyKey,
+  updates,
+  selectedIds,
+  onToggleSelect,
+  onClearSelection,
+  onBulkSync,
+  onBulkRemove,
 }) {
+  const selectionCount = selectedIds.size;
   return (
     <div>
-      <FilterToolbar
-        agentFilter={agentFilter}
-        agentOptions={agentOptions}
-        onAgentFilter={onAgentFilter}
-        filteredCount={items.length}
-        totalCount={totalCount}
-        anyFilter={anyFilter}
-        onClearFilters={onClearFilters}
-      />
+      {selectionCount > 0 ? (
+        <BatchToolbar
+          count={selectionCount}
+          targets={targets}
+          busy={busyKey === "batch"}
+          onBulkSync={onBulkSync}
+          onBulkRemove={onBulkRemove}
+          onClear={onClearSelection}
+        />
+      ) : (
+        <FilterToolbar
+          agentFilter={agentFilter}
+          agentOptions={agentOptions}
+          onAgentFilter={onAgentFilter}
+          filteredCount={items.length}
+          totalCount={totalCount}
+          anyFilter={anyFilter}
+          onClearFilters={onClearFilters}
+        />
+      )}
       {items.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-oai-gray-200 px-4 py-10 text-center text-sm text-oai-gray-500 dark:border-oai-gray-800 dark:text-oai-gray-400">
           <p>{copy("skills.empty.no_match")}</p>
@@ -273,6 +416,12 @@ function MySkillsView({
               targets={targets}
               selected={selectedId === (skill.id || skill.directory)}
               onSelect={onSelect}
+              selectable
+              checked={selectedIds.has(skill.id)}
+              onToggleSelect={onToggleSelect}
+              onToggleTarget={onToggleTarget}
+              hasUpdate={Boolean(skill.id && updates?.[skill.id])}
+              busyKey={busyKey}
             />
           ))}
         </div>
@@ -286,7 +435,7 @@ const BROWSE_CARD_STYLE = {
   containIntrinsicSize: "0 240px",
 };
 
-const BrowseCard = React.memo(function BrowseCard({ skill, installed, installing, allTargets, defaultTargets, onInstall }) {
+const BrowseCard = React.memo(function BrowseCard({ skill, installed, installing, allTargets, defaultTargets, onInstall, onManage }) {
   const [selectedTargets, setSelectedTargets] = useState(() =>
     (defaultTargets || []).filter((id) => allTargets.some((t) => t.id === id)),
   );
@@ -351,12 +500,6 @@ const BrowseCard = React.memo(function BrowseCard({ skill, installed, installing
             </div>
           ) : null}
         </div>
-        {installed ? (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-oai-black/[0.06] px-2 py-1 text-xs font-medium text-oai-gray-700 ring-1 ring-oai-black/10 dark:bg-white/[0.08] dark:text-oai-gray-200 dark:ring-white/10">
-            <Check className="h-3 w-3" aria-hidden />
-            {copy("skills.card.installed")}
-          </span>
-        ) : null}
       </div>
 
       {skill.description ? (
@@ -367,10 +510,16 @@ const BrowseCard = React.memo(function BrowseCard({ skill, installed, installing
 
       <div className="mt-auto pt-5">
         {installed ? (
-          <div className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-md bg-oai-black/[0.04] text-sm font-medium text-oai-gray-700 ring-1 ring-inset ring-oai-black/[0.08] dark:bg-white/[0.05] dark:text-oai-gray-200 dark:ring-white/[0.08]">
-            <Check className="h-3.5 w-3.5" aria-hidden />
-            {copy("skills.card.installed")}
-          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => onManage?.(skill)}
+            className="w-full"
+          >
+            <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" aria-hidden />
+            {copy("skills.card.manage")}
+          </Button>
         ) : (
           <div className="space-y-2">
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-oai-gray-600 dark:text-oai-gray-300">
@@ -524,7 +673,13 @@ export function SkillsPage() {
   const [browseLoading, setBrowseLoading] = useState(false);
   const [error, setError] = useState("");
   const [pendingRemove, setPendingRemove] = useState(null);
-  const [toast, setToast] = useState(null); // { message, undo, key }
+  const [pendingBulkRemove, setPendingBulkRemove] = useState(null); // array of skills
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [updates, setUpdates] = useState({}); // skillId -> bool
+  const [usageBySkill, setUsageBySkill] = useState({}); // lowercased dir/name -> usage entry
+  const [popularData, setPopularData] = useState([]);
+  const [popularLoading, setPopularLoading] = useState(false);
+  const appliedSkillParam = useRef(false);
 
   const installedKeys = useMemo(() => {
     const keys = new Set();
@@ -562,6 +717,43 @@ export function SkillsPage() {
     }
   }, []);
 
+  const loadPopular = useCallback(async ({ force = false } = {}) => {
+    setPopularLoading(true);
+    try {
+      const data = await getPopularSkills({ force });
+      setPopularData(data.skills || []);
+    } finally {
+      setPopularLoading(false);
+    }
+  }, []);
+
+  // Update + usage signals are best-effort enrichments for the My tab — a failure
+  // (e.g. GitHub rate limit) must never block the core list.
+  const loadUpdates = useCallback(async () => {
+    try {
+      const data = await checkSkillUpdates();
+      setUpdates(data?.updates || {});
+    } catch (_e) {
+      setUpdates({});
+    }
+  }, []);
+
+  const loadUsage = useCallback(async () => {
+    try {
+      const data = await getSkillUsage();
+      const map = {};
+      for (const entry of data?.skills || []) {
+        if (entry.installed) {
+          if (entry.directory) map[String(entry.directory).toLowerCase()] = entry;
+          map[String(entry.skill).toLowerCase()] = entry;
+        }
+      }
+      setUsageBySkill(map);
+    } catch (_e) {
+      setUsageBySkill({});
+    }
+  }, []);
+
   const loadInitial = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -576,30 +768,75 @@ export function SkillsPage() {
 
   const handleRefresh = useCallback(async () => {
     await loadInitial();
-    if (tab === "browse" && source !== SOURCE_SKILLSSH) {
-      loadDiscover({ force: true }).catch((err) =>
-        setError(err?.message || copy("skills.error.generic")),
-      );
+    const fail = (err) => setError(err?.message || copy("skills.error.generic"));
+    if (tab === "my") {
+      loadUpdates();
+      loadUsage();
+    } else if (source === SOURCE_POPULAR) {
+      loadPopular({ force: true }).catch(fail);
+    } else if (source !== SOURCE_SKILLSSH) {
+      loadDiscover({ force: true }).catch(fail);
     }
-  }, [loadDiscover, loadInitial, source, tab]);
+  }, [loadDiscover, loadInitial, loadPopular, loadUpdates, loadUsage, source, tab]);
 
   useEffect(() => {
     loadInitial();
   }, [loadInitial]);
 
+  // Deep-link from the command palette: ?skill=<directory|id> opens that skill's
+  // detail panel once the installed list has loaded, then strips the param.
+  useEffect(() => {
+    if (appliedSkillParam.current || typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const want = params.get("skill");
+    if (!want) {
+      appliedSkillParam.current = true;
+      return;
+    }
+    const list = installedData.skills || [];
+    if (!list.length) return; // wait for the first load
+    const match = list.find((s) => s.directory === want || s.id === want);
+    if (match) {
+      setTab("my");
+      setSelectedSkillId(match.id || match.directory);
+    }
+    appliedSkillParam.current = true;
+    params.delete("skill");
+    const search = params.toString();
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`,
+    );
+  }, [installedData.skills]);
+
   useEffect(() => {
     if (tab !== "browse") return;
-    if (source === SOURCE_SKILLSSH) return;
+    if (source === SOURCE_SKILLSSH || source === SOURCE_POPULAR) return;
     if (discoverData.length === 0) {
       loadDiscover().catch((err) => setError(err?.message || copy("skills.error.generic")));
     }
   }, [discoverData.length, loadDiscover, source, tab]);
 
+  // Popular = skills.sh search results aggregated by install count (no leaderboard
+  // endpoint exists), loaded lazily on first switch to the Popular source.
   useEffect(() => {
-    if (!toast) return undefined;
-    const timer = setTimeout(() => setToast((current) => (current?.key === toast.key ? null : current)), toast.ttlMs || 5000);
-    return () => clearTimeout(timer);
-  }, [toast]);
+    if (tab !== "browse" || source !== SOURCE_POPULAR) return;
+    if (popularData.length === 0) {
+      loadPopular().catch((err) => setError(err?.message || copy("skills.error.generic")));
+    }
+  }, [loadPopular, popularData.length, source, tab]);
+
+  // Enrich the My tab with update + usage signals. Loaded once (guarded on
+  // emptiness like the discover/popular effects) so toggling tabs doesn't refetch;
+  // handleRefresh forces a reload. Best-effort: never surfaced as a hard error.
+  const hasUpdatesLoaded = Object.keys(updates).length > 0;
+  const hasUsageLoaded = Object.keys(usageBySkill).length > 0;
+  useEffect(() => {
+    if (tab !== "my") return;
+    if (!hasUpdatesLoaded) loadUpdates();
+    if (!hasUsageLoaded) loadUsage();
+  }, [tab, hasUpdatesLoaded, hasUsageLoaded, loadUpdates, loadUsage]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query), 200);
@@ -656,13 +893,12 @@ export function SkillsPage() {
       const labels = finalTargets
         .map((id) => (installedData.targets || []).find((t) => t.id === id)?.label || id)
         .join(", ");
-      setToast({
-        key: `${Date.now()}:install:${getSkillKey(skill)}`,
-        message: copy("skills.toast.installed", {
+      showToast({
+        title: copy("skills.toast.installed", {
           name: skill.name || skill.directory,
           targets: labels || copy("skills.target.none"),
         }),
-        ttlMs: 4000,
+        timeout: 4000,
       });
     });
   };
@@ -683,21 +919,21 @@ export function SkillsPage() {
         await deleteLocalSkill(skill.directory, skill.targets || []);
       }
       const canUndo = Boolean(result?.trashed && skill.managed && skill.id);
-      setToast({
-        key: `${Date.now()}:${skill.id || skill.directory}`,
-        message: copy("skills.toast.removed", { name: skill.name || skill.directory }),
-        undo: canUndo
-          ? async () => {
-              try {
-                await restoreSkill(skill.id);
-                await loadInstalled();
-                setToast(null);
-              } catch (err) {
-                setError(err?.message || copy("skills.error.generic"));
-              }
+      showToast({
+        title: copy("skills.toast.removed", { name: skill.name || skill.directory }),
+        timeout: 6000,
+        data: canUndo
+          ? {
+              onUndo: async () => {
+                try {
+                  await restoreSkill(skill.id);
+                  await loadInstalled();
+                } catch (err) {
+                  setError(err?.message || copy("skills.error.generic"));
+                }
+              },
             }
-          : null,
-        ttlMs: 5000,
+          : undefined,
       });
     });
   };
@@ -714,7 +950,96 @@ export function SkillsPage() {
         // target updates registry + SSOT uniformly.
         await importLocalSkill(skill.directory, Array.from(next));
       }
+      const toastVars = { name: skill.name || skill.directory, agent: targetLabelFor(targetId) };
+      showToast({
+        title: enabled
+          ? copy("skills.toast.synced_one", toastVars)
+          : copy("skills.toast.unsynced_one", toastVars),
+        timeout: 3000,
+      });
     });
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  const handleToggleSelect = useCallback((skill, checked) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(skill.id);
+      else next.delete(skill.id);
+      return next;
+    });
+  }, []);
+
+  const targetLabelFor = (targetId) =>
+    (installedData.targets || []).find((t) => t.id === targetId)?.label || targetId;
+
+  const handleBulkSync = (targetId) => {
+    const list = (installedData.skills || []).filter((s) => selectedIds.has(s.id));
+    if (!list.length) return;
+    runMutation("batch", async () => {
+      for (const skill of list) {
+        const next = new Set(skill.targets || []);
+        next.add(targetId);
+        // Unmanaged skills get promoted + synced via importLocalSkill (same path
+        // as a single-dot toggle); managed ones just update their target set.
+        if (skill.managed) await setSkillTargets(skill.id, Array.from(next));
+        else await importLocalSkill(skill.directory, Array.from(next));
+      }
+      clearSelection();
+      showToast({
+        title: copy("skills.toast.bulk_synced", { count: list.length, agent: targetLabelFor(targetId) }),
+        timeout: 4000,
+      });
+    });
+  };
+
+  const handleBulkRemove = () => {
+    const list = (installedData.skills || []).filter((s) => selectedIds.has(s.id));
+    if (list.length) setPendingBulkRemove(list);
+  };
+
+  const confirmBulkRemove = () => {
+    const list = pendingBulkRemove;
+    if (!list) return;
+    setPendingBulkRemove(null);
+    runMutation("batch", async () => {
+      for (const skill of list) {
+        if (skill.managed) await uninstallSkill(skill.id);
+        else await deleteLocalSkill(skill.directory, skill.targets || []);
+      }
+      clearSelection();
+      showToast({
+        title: copy("skills.toast.bulk_removed", { count: list.length }),
+        timeout: 4000,
+      });
+    });
+  };
+
+  // Apply an upstream update by re-installing the same skill (overwrites the SSOT
+  // copy + re-syncs to its current targets, then refreshes the update signal).
+  const handleUpdate = (skill) => {
+    if (!skill?.repoOwner || !skill?.repoName) return;
+    runMutation(installBusyKey(skill), async () => {
+      await installSkill(
+        {
+          key: skill.key,
+          name: skill.name,
+          description: skill.description,
+          directory: skill.sourceDirectory || skill.directory,
+          repoOwner: skill.repoOwner,
+          repoName: skill.repoName,
+          repoBranch: skill.repoBranch,
+          readmeUrl: skill.readmeUrl,
+        },
+        skill.targets && skill.targets.length ? skill.targets : DEFAULT_TARGETS,
+      );
+      await loadUpdates();
+      showToast({
+        title: copy("skills.toast.updated", { name: skill.name || skill.directory }),
+        timeout: 4000,
+      });
+    });
+  };
 
   const handleSearch = async () => {
     const trimmed = query.trim();
@@ -782,17 +1107,35 @@ export function SkillsPage() {
 
   const handleCloseDetail = useCallback(() => setSelectedSkillId(null), []);
 
-  // Close detail panel when leaving My tab or when skill no longer present.
+  // "Manage" on an installed browse/popular card: open that skill's detail panel
+  // in place (sync targets, usage, remove) without leaving the current tab.
+  const handleManage = useCallback(
+    (browseSkill) => {
+      const tail = String(browseSkill.directory || "").split(/[\\/]/).pop().toLowerCase();
+      const match = (installedData.skills || []).find(
+        (s) => String(s.directory || "").toLowerCase() === tail,
+      );
+      if (match) setSelectedSkillId(match.id || match.directory);
+    },
+    [installedData.skills],
+  );
+
+  // Multi-select is My-tab only; drop it when leaving. The detail panel may stay
+  // open on either tab (Browse "Manage" opens it in place).
   useEffect(() => {
-    if (tab !== "my" && selectedSkillId) setSelectedSkillId(null);
-  }, [tab, selectedSkillId]);
+    if (tab !== "my" && selectedIds.size) setSelectedIds(new Set());
+  }, [tab, selectedIds.size]);
   useEffect(() => {
     if (selectedSkillId && !selectedSkill) setSelectedSkillId(null);
   }, [selectedSkill, selectedSkillId]);
 
   const browseItems = useMemo(() => {
-    const pool = source === SOURCE_SKILLSSH ? searchData : discoverData;
-    const filtered = source === SOURCE_SKILLSSH || source === SOURCE_ALL
+    const pool =
+      source === SOURCE_SKILLSSH ? searchData : source === SOURCE_POPULAR ? popularData : discoverData;
+    // skills.sh-backed sources (search, popular) are already server-ranked; only
+    // the repo sources get the per-repo dropdown filter applied.
+    const serverRanked = source === SOURCE_SKILLSSH || source === SOURCE_POPULAR;
+    const filtered = serverRanked || source === SOURCE_ALL
       ? pool
       : pool.filter((skill) => `${skill.repoOwner}/${skill.repoName}` === source);
     const q = debouncedQuery.trim().toLowerCase();
@@ -811,7 +1154,7 @@ export function SkillsPage() {
         installed: installedKeys.has(fullKey) || (dirKey && installedKeys.has(dirKey)),
       };
     });
-  }, [debouncedQuery, discoverData, installedKeys, searchData, source]);
+  }, [debouncedQuery, discoverData, installedKeys, popularData, searchData, source]);
 
   const loadingNode = (
     <div className="flex h-64 items-center justify-center">
@@ -849,6 +1192,14 @@ export function SkillsPage() {
         onClearFilters={handleClearMyFilters}
         selectedId={selectedSkillId}
         onSelect={handleSelectSkill}
+        onToggleTarget={handleToggleTarget}
+        busyKey={busyKey}
+        updates={updates}
+        selectedIds={selectedIds}
+        onToggleSelect={handleToggleSelect}
+        onClearSelection={clearSelection}
+        onBulkSync={handleBulkSync}
+        onBulkRemove={handleBulkRemove}
       />
     ) : (
       <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-oai-gray-200 px-4 py-10 text-center dark:border-oai-gray-800">
@@ -914,15 +1265,17 @@ export function SkillsPage() {
   } else {
     // Browse
     const isSkillsSh = source === SOURCE_SKILLSSH;
-    const noSources = repos.length === 0 && !isSkillsSh;
-    const browseAnyFilter = !isSkillsSh && (debouncedQuery.trim() !== "" || source !== SOURCE_ALL);
+    const isPopular = source === SOURCE_POPULAR;
+    const noSources = repos.length === 0 && !isSkillsSh && !isPopular;
+    const browseBusy = (browseLoading && !isSkillsSh && !isPopular) || (isPopular && popularLoading);
+    const browseAnyFilter = !isSkillsSh && !isPopular && (debouncedQuery.trim() !== "" || source !== SOURCE_ALL);
     const handleClearBrowseFilters = () => {
       setQuery("");
       setSource(SOURCE_ALL);
     };
 
     const countNode =
-      !noSources && !browseLoading && (browseItems.length > 0 || browseAnyFilter) ? (
+      !noSources && !browseBusy && (browseItems.length > 0 || browseAnyFilter) ? (
         <div className="mb-2 flex flex-wrap items-center gap-2 px-1 text-xs text-oai-gray-500 dark:text-oai-gray-400">
           <span>
             {copy("skills.filter.result_count_browse", { count: browseItems.length })}
@@ -949,7 +1302,7 @@ export function SkillsPage() {
           </p>
         </div>
       );
-    } else if (browseLoading && !isSkillsSh) {
+    } else if (browseBusy) {
       resultNode = browseLoadingNode;
     } else if (isSkillsSh && query.trim().length < 2) {
       resultNode = (
@@ -969,6 +1322,7 @@ export function SkillsPage() {
                 allTargets={targets}
                 defaultTargets={DEFAULT_TARGETS}
                 onInstall={handleInstall}
+                onManage={handleManage}
               />
             </div>
           ))}
@@ -983,6 +1337,8 @@ export function SkillsPage() {
       );
     } else if (isSkillsSh) {
       resultNode = emptyNode("skills.empty.search");
+    } else if (isPopular) {
+      resultNode = emptyNode("skills.empty.popular");
     } else {
       resultNode = emptyNode("skills.empty.browse");
     }
@@ -1001,7 +1357,7 @@ export function SkillsPage() {
     ) : null;
 
     const hintNode =
-      !manageOpen && !isSkillsSh && repos.length <= 1 && browseItems.length > 0 ? (
+      !manageOpen && !isSkillsSh && !isPopular && repos.length <= 1 && browseItems.length > 0 ? (
         <DismissibleHint id="skills-browse-intro" className="mt-6">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span>{copy("skills.browse.add_repo_hint")}</span>
@@ -1039,9 +1395,9 @@ export function SkillsPage() {
               variant="secondary"
               size="sm"
               onClick={handleRefresh}
-              disabled={loading || browseLoading}
+              disabled={loading || browseLoading || popularLoading}
             >
-              <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", (loading || browseLoading) && "animate-spin")} aria-hidden />
+              <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", (loading || browseLoading || popularLoading) && "animate-spin")} aria-hidden />
               {copy("skills.action.refresh")}
             </Button>
           </div>
@@ -1082,33 +1438,33 @@ export function SkillsPage() {
                 className="inline-flex h-10 shrink-0 items-center rounded-md border border-oai-gray-200 bg-oai-white p-1 dark:border-oai-gray-800 dark:bg-oai-gray-900"
               >
                 {[
-                  ["repo", copy("skills.mode.repo")],
-                  ["skillssh", copy("skills.mode.skillssh")],
-                ].map(([value, label]) => {
-                  const active = (value === "skillssh") === (source === SOURCE_SKILLSSH);
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      onClick={() => {
-                        if (value === "skillssh") setSource(SOURCE_SKILLSSH);
-                        else if (source === SOURCE_SKILLSSH) setSource(SOURCE_ALL);
-                      }}
-                      className={cn(
-                        "rounded px-3 py-1 text-sm font-medium transition-colors",
-                        active
-                          ? "bg-oai-gray-100 text-oai-black dark:bg-oai-gray-700 dark:text-white"
-                          : "text-oai-gray-500 hover:text-oai-gray-800 dark:text-oai-gray-400 dark:hover:text-oai-gray-200",
-                      )}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
+                  ["repo", copy("skills.mode.repo"), source !== SOURCE_SKILLSSH && source !== SOURCE_POPULAR],
+                  ["popular", copy("skills.mode.popular"), source === SOURCE_POPULAR],
+                  ["skillssh", copy("skills.mode.skillssh"), source === SOURCE_SKILLSSH],
+                ].map(([value, label, active]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => {
+                      if (value === "skillssh") setSource(SOURCE_SKILLSSH);
+                      else if (value === "popular") setSource(SOURCE_POPULAR);
+                      else if (source === SOURCE_SKILLSSH || source === SOURCE_POPULAR) setSource(SOURCE_ALL);
+                    }}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded px-3 py-1 text-sm font-medium transition-colors",
+                      active
+                        ? "bg-oai-gray-100 text-oai-black dark:bg-oai-gray-700 dark:text-white"
+                        : "text-oai-gray-500 hover:text-oai-gray-800 dark:text-oai-gray-400 dark:hover:text-oai-gray-200",
+                    )}
+                  >
+                    {value === "popular" ? <Flame className="h-3.5 w-3.5" aria-hidden /> : null}
+                    {label}
+                  </button>
+                ))}
               </div>
-              {source !== SOURCE_SKILLSSH ? (
+              {source !== SOURCE_SKILLSSH && source !== SOURCE_POPULAR ? (
                 <Select.Root value={source} onValueChange={setSource}>
                   <Select.Trigger
                     aria-label={copy("skills.source.label")}
@@ -1166,9 +1522,11 @@ export function SkillsPage() {
                   placeholder={
                     source === SOURCE_SKILLSSH
                       ? copy("skills.browse.placeholder_skillssh")
-                      : source === SOURCE_ALL
-                        ? copy("skills.browse.placeholder_all")
-                        : copy("skills.browse.placeholder_repo", { repo: source })
+                      : source === SOURCE_POPULAR
+                        ? copy("skills.browse.placeholder_popular")
+                        : source === SOURCE_ALL
+                          ? copy("skills.browse.placeholder_all")
+                          : copy("skills.browse.placeholder_repo", { repo: source })
                   }
                   className="pl-9 !border-oai-gray-200 dark:!border-oai-gray-800 focus:!border-oai-gray-400 focus:!ring-oai-gray-400/20 dark:focus:!border-oai-gray-500 dark:focus:!ring-oai-gray-500/20"
                 />
@@ -1187,7 +1545,7 @@ export function SkillsPage() {
                   )}
                   {copy("skills.action.search")}
                 </Button>
-              ) : (
+              ) : source === SOURCE_POPULAR ? null : (
                 <Button
                   type="button"
                   variant="secondary"
@@ -1211,6 +1569,16 @@ export function SkillsPage() {
             skill={selectedSkill}
             targets={targets}
             busyKey={busyKey}
+            usage={
+              selectedSkill
+                ? usageBySkill[String(selectedSkill.directory || "").toLowerCase()] ||
+                  usageBySkill[String(selectedSkill.name || "").toLowerCase()] ||
+                  null
+                : null
+            }
+            hasUpdate={Boolean(selectedSkill?.id && updates?.[selectedSkill.id])}
+            updating={selectedSkill ? busyKey === installBusyKey(selectedSkill) : false}
+            onUpdate={handleUpdate}
             onClose={handleCloseDetail}
             onToggleTarget={handleToggleTarget}
             onRemove={handleRemove}
@@ -1238,27 +1606,17 @@ export function SkillsPage() {
         onConfirm={confirmRemove}
       />
 
-      <div
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        className="pointer-events-none fixed inset-x-0 bottom-6 z-[90] flex justify-center px-4"
-      >
-        {toast ? (
-          <div className="pointer-events-auto flex max-w-md items-center gap-3 rounded-full bg-oai-black px-4 py-2 text-sm text-white shadow-lg dark:bg-white dark:text-oai-black">
-            <span>{toast.message}</span>
-            {toast.undo ? (
-              <button
-                type="button"
-                onClick={toast.undo}
-                className="rounded-full px-2 py-0.5 text-xs font-semibold uppercase tracking-wide hover:bg-white/10 dark:hover:bg-oai-black/10"
-              >
-                {copy("shared.action.undo")}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+      <ConfirmModal
+        open={Boolean(pendingBulkRemove)}
+        title={copy("skills.confirm.bulk_remove_title", { count: pendingBulkRemove?.length || 0 })}
+        description={copy("skills.confirm.bulk_remove_desc")}
+        confirmLabel={copy("skills.action.remove")}
+        cancelLabel={copy("shared.action.cancel")}
+        destructive
+        busy={busyKey === "batch"}
+        onCancel={() => setPendingBulkRemove(null)}
+        onConfirm={confirmBulkRemove}
+      />
     </div>
   );
 }

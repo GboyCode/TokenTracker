@@ -26,7 +26,7 @@ import { isNativeApp, isNativeEmbed } from "../../lib/native-bridge.js";
 
 const STORAGE_KEY = "tt.sidebarCollapsed";
 
-function getNavGroups() {
+export function getNavGroups() {
   // copy() must be called at render time so locale switches apply.
   // Validator regex picks up these literal calls.
   return [

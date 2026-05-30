@@ -13,6 +13,8 @@ import { isMockEnabled } from "./lib/mock-data";
 import { isScreenshotModeEnabled } from "./lib/screenshot-mode";
 import { useCloudUsageSync } from "./hooks/use-cloud-usage-sync";
 import { AppLayout } from "./ui/components/Sidebar.jsx";
+import { CommandPalette } from "./ui/dashboard/components/CommandPalette.jsx";
+import { ToastProvider } from "./ui/components/Toast.jsx";
 // NativeAuthCallbackPage must be eager-imported: its module-level code
 // captures the OAuth `insforge_code` query param synchronously at app
 // boot, BEFORE the InsForge SDK's detectAuthCallback() strips it. Lazy
@@ -190,12 +192,15 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <LoginModalProvider>
-          <Suspense fallback={null}>{content}</Suspense>
-          <LoginModal />
-          <Analytics />
-          <SpeedInsights />
-        </LoginModalProvider>
+        <ToastProvider>
+          <LoginModalProvider>
+            <Suspense fallback={null}>{content}</Suspense>
+            {showSidebar ? <CommandPalette /> : null}
+            <LoginModal />
+            <Analytics />
+            <SpeedInsights />
+          </LoginModalProvider>
+        </ToastProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );

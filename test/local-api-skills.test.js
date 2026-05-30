@@ -149,4 +149,47 @@ describe("/functions/tokentracker-skills auth + input", () => {
     assert.equal(status, 500);
     assert.match(body.error, /owner and name/);
   });
+
+  it("GET mode=activity returns {activity: []}", async () => {
+    const { status, body } = await call({ method: "GET", search: "?mode=activity" });
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.activity));
+  });
+
+  it("GET mode=updates returns {updates} with no managed skills (no network)", async () => {
+    const { status, body } = await call({ method: "GET", search: "?mode=updates" });
+    assert.equal(status, 200);
+    assert.ok(body.updates && typeof body.updates === "object");
+  });
+
+  it("GET mode=skill_usage returns priced shape joined with installed", async () => {
+    const { status, body } = await call({ method: "GET", search: "?mode=skill_usage" });
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.skills));
+    assert.ok(Array.isArray(body.unusedInstalled));
+    assert.ok(Number.isFinite(body.totalInvocations));
+  });
+
+  it("GET mode=popular returns install-sorted skills (stubbed fetch)", async () => {
+    const realFetch = global.fetch;
+    global.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        count: 2,
+        skills: [
+          { id: "o/r:low", name: "Low", skillId: "low", source: "o/r", installs: 3 },
+          { id: "o/r:high", name: "High", skillId: "high", source: "o/r", installs: 900 },
+        ],
+      }),
+    });
+    try {
+      const { status, body } = await call({ method: "GET", search: "?mode=popular&force=1" });
+      assert.equal(status, 200);
+      assert.ok(Array.isArray(body.skills));
+      assert.equal(body.skills[0].name, "High", "highest installs first");
+    } finally {
+      global.fetch = realFetch;
+    }
+  });
 });

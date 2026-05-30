@@ -554,6 +554,7 @@ skills.empty.no_match,ui,SkillsPage,SkillsPage,empty_no_match,"No skills match t
 hint.dismiss,ui,shared,DismissibleHint,hint_dismiss,"Dismiss hint",,active
 hint.dismissible_aria,ui,shared,DismissibleHint,hint_dismissible_aria,"Dismissible hint",,active
 skills.card.installed,ui,SkillsPage,SkillCard,card_installed,Installed,,active
+skills.card.manage,ui,SkillsPage,SkillCard,card_manage,Manage,,active
 skills.card.targets_prefix,ui,SkillsPage,SkillCard,card_targets_prefix,"Will install to:",,active
 skills.card.targets_change,ui,SkillsPage,SkillCard,card_targets_change,Change,,active
 skills.card.installs,ui,SkillsPage,SkillCard,installs,"{{count}} installs",,active
@@ -575,6 +576,7 @@ skills.confirm.remove_managed,ui,SkillsPage,SkillsPage,confirm_remove_managed,"T
 skills.confirm.remove_local,ui,SkillsPage,SkillsPage,confirm_remove_local,"This will delete the skill folder on disk from every connected AI tool. This cannot be undone.",,active
 skills.toast.removed,ui,SkillsPage,SkillsPage,toast_removed,"Removed {{name}}.",,active
 shared.action.undo,shared,*,Shared,action_undo,"Undo",,active
+shared.action.dismiss,shared,*,Shared,action_dismiss,"Dismiss",,active
 shared.action.cancel,shared,*,Shared,action_cancel,"Cancel",,active
 skills.empty.my,ui,SkillsPage,SkillsPage,empty_my,"No skills yet. Open Discover to search and install.",,active
 skills.empty.my_cta,ui,SkillsPage,SkillsPage,empty_my_cta,"Browse",,active
@@ -863,3 +865,43 @@ landing.v2.leaderboard.synced_tokens,landing,LandingPage,MarketingLanding,synced
 landing.v2.leaderboard.efficiency,landing,LandingPage,MarketingLanding,efficiency,"Efficiency: {{value}}",,active
 landing.v2.leaderboard.streak_days,landing,LandingPage,MarketingLanding,streak_days,"{{count}} day streak",,active
 landing.v2.leaderboard.view_more,landing,LandingPage,MarketingLanding,view_more,"View full leaderboard",,active
+cmdk.placeholder,ui,CommandPalette,CommandPalette,placeholder,"Search pages and skills…",,active
+cmdk.empty,ui,CommandPalette,CommandPalette,empty,"No matches",,active
+cmdk.group.pages,ui,CommandPalette,CommandPalette,group_pages,"Pages",,active
+cmdk.group.skills,ui,CommandPalette,CommandPalette,group_skills,"Skills",,active
+cmdk.close,ui,CommandPalette,CommandPalette,close,"Close command menu",,active
+cmdk.open_aria,ui,CommandPalette,CommandPalette,open_aria,"Command menu",,active
+skills.dot.synced_aria,ui,SkillsPage,AgentDots,dot_synced_aria,"{{agent}}: synced. Click to unsync.",,active
+skills.dot.off_aria,ui,SkillsPage,AgentDots,dot_off_aria,"{{agent}}: not synced. Click to sync.",,active
+skills.dot.orphan_aria,ui,SkillsPage,AgentDots,dot_orphan_aria,"{{agent}}: link broken. Click to re-sync.",,active
+skills.update.badge,ui,SkillsPage,InstalledSkillRow,update_badge,"Update",,active
+skills.select.row_aria,ui,SkillsPage,InstalledSkillRow,select_row_aria,"Select {{name}}",,active
+skills.select.toolbar_aria,ui,SkillsPage,BatchToolbar,select_toolbar_aria,"Bulk actions",,active
+skills.select.count,ui,SkillsPage,BatchToolbar,select_count,"{{count}} selected",,active
+skills.select.bulk_sync,ui,SkillsPage,BatchToolbar,select_bulk_sync,"Sync to",,active
+skills.select.bulk_sync_hint,ui,SkillsPage,BatchToolbar,select_bulk_sync_hint,"Add agent to all selected",,active
+skills.select.bulk_remove,ui,SkillsPage,BatchToolbar,select_bulk_remove,"Remove",,active
+skills.select.clear,ui,SkillsPage,BatchToolbar,select_clear,"Clear",,active
+skills.mode.popular,ui,SkillsPage,SkillsPage,mode_popular,"Popular",,active
+skills.browse.placeholder_popular,ui,SkillsPage,SkillsPage,browse_placeholder_popular,"Filter popular skills",,active
+skills.empty.popular,ui,SkillsPage,SkillsPage,empty_popular,"No popular skills right now.",,active
+skills.toast.bulk_synced,ui,SkillsPage,SkillsPage,toast_bulk_synced,"Synced {{count}} skills to {{agent}}.",,active
+skills.toast.bulk_removed,ui,SkillsPage,SkillsPage,toast_bulk_removed,"Removed {{count}} skills.",,active
+skills.toast.synced_one,ui,SkillsPage,SkillsPage,toast_synced_one,"Synced {{name}} to {{agent}}.",,active
+skills.toast.unsynced_one,ui,SkillsPage,SkillsPage,toast_unsynced_one,"Unsynced {{name}} from {{agent}}.",,active
+skills.toast.updated,ui,SkillsPage,SkillsPage,toast_updated,"Updated {{name}}.",,active
+skills.confirm.bulk_remove_title,ui,SkillsPage,SkillsPage,confirm_bulk_remove_title,"Remove {{count}} skills?",,active
+skills.confirm.bulk_remove_desc,ui,SkillsPage,SkillsPage,confirm_bulk_remove_desc,"This unsyncs each skill from every agent and deletes its local copy.",,active
+skills.update.available,ui,SkillsPage,SkillDetailPanel,update_available,"A newer version is available upstream.",,active
+skills.update.action,ui,SkillsPage,SkillDetailPanel,update_action,"Update",,active
+skills.usage.section_title,ui,SkillsPage,SkillDetailPanel,usage_section_title,"Activity",,active
+skills.usage.invocations,ui,SkillsPage,SkillDetailPanel,usage_invocations,"Invocations",,active
+skills.usage.cost,ui,SkillsPage,SkillDetailPanel,usage_cost,"Est. cost",,active
+skills.usage.never,ui,SkillsPage,SkillDetailPanel,usage_never,"Never",,active
+skills.usage.last_used,ui,SkillsPage,SkillDetailPanel,usage_last_used,"Last used",,active
+skills.usage.today,ui,SkillsPage,SkillDetailPanel,usage_today,"Today",,active
+skills.usage.days_ago,ui,SkillsPage,SkillDetailPanel,usage_days_ago,"{{days}}d ago",,active
+skills.usage.months_ago,ui,SkillsPage,SkillDetailPanel,usage_months_ago,"{{months}}mo ago",,active
+skills.usage.unknown,ui,SkillsPage,SkillDetailPanel,usage_unknown,"Unknown",,active
+skills.usage.unused,ui,SkillsPage,SkillDetailPanel,usage_unused,"Not invoked yet. Possible dead weight if you never use it.",,active
+skills.usage.disclaimer,ui,SkillsPage,SkillDetailPanel,usage_disclaimer,"Counts from Claude transcripts. Cost is the approximate spend of turns that invoked this skill.",,active

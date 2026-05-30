@@ -1,15 +1,12 @@
 import React, { useEffect, useRef } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Checkbox } from "@base-ui/react/checkbox";
-import { Check, ExternalLink, Loader2, Trash2, X } from "lucide-react";
+import { ArrowUpCircle, Check, ExternalLink, Info, Loader2, Trash2, X } from "lucide-react";
 import { ProviderIcon } from "../ui/dashboard/components/ProviderIcon.jsx";
 import { copy } from "../lib/copy";
-
-// New copy keys introduced by this file (registered in copy.csv):
-//   skills.detail.close              -> "Close details"
-//   skills.detail.sync_section_title -> "Sync to"
-//   skills.detail.remove_button      -> "Remove from all agents"
-//   skills.detail.remove_confirm_hint -> "This unsyncs the skill from every agent and deletes its local copy."
+import { cn } from "../lib/cn";
+import { formatUsdCurrency, toDisplayNumber } from "../lib/format";
+import { useCurrency } from "../hooks/useCurrency.js";
 
 function targetBusyKey(skillId, targetId) {
   return `target:${skillId}:${targetId}`;
@@ -19,10 +16,52 @@ function removeBusyKey(skill) {
   return `remove:${skill.id || skill.directory}`;
 }
 
+function daysSince(iso) {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return null;
+  return Math.floor((Date.now() - then) / 86400000);
+}
+
+function relativeLastUsed(iso) {
+  const days = daysSince(iso);
+  if (days == null) return null;
+  if (days <= 0) return copy("skills.usage.today");
+  if (days < 30) return copy("skills.usage.days_ago", { days });
+  const months = Math.max(1, Math.floor(days / 30));
+  return copy("skills.usage.months_ago", { months });
+}
+
+// Recency tone for the last-used dot: fresh (≤7d) green, fading (≤30d) amber,
+// stale / never gray. Meaningful color, not decorative — at-a-glance "do I still
+// use this".
+function freshnessTone(iso) {
+  const days = daysSince(iso);
+  if (days == null) return "bg-oai-gray-300 dark:bg-oai-gray-600";
+  if (days <= 7) return "bg-emerald-500";
+  if (days <= 30) return "bg-amber-500";
+  return "bg-oai-gray-300 dark:bg-oai-gray-600";
+}
+
+// One properties row: muted label left, value right. Detail-panel convention,
+// not a metrics dashboard.
+function PropRow({ label, children }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-2 text-sm">
+      <dt className="flex items-center gap-1 text-oai-gray-500 dark:text-oai-gray-400">{label}</dt>
+      <dd className="text-right font-medium tabular-nums text-oai-black dark:text-white">{children}</dd>
+    </div>
+  );
+}
+
 export function SkillDetailPanel({
   skill,
   targets,
   busyKey,
+  usage,
+  hasUpdate,
+  updating,
+  onUpdate,
   onClose,
   onToggleTarget,
   onRemove,
@@ -35,6 +74,10 @@ export function SkillDetailPanel({
           skill={skill}
           targets={targets}
           busyKey={busyKey}
+          usage={usage}
+          hasUpdate={hasUpdate}
+          updating={updating}
+          onUpdate={onUpdate}
           onClose={onClose}
           onToggleTarget={onToggleTarget}
           onRemove={onRemove}
@@ -48,11 +91,16 @@ function SkillDetailPanelInner({
   skill,
   targets,
   busyKey,
+  usage,
+  hasUpdate,
+  updating,
+  onUpdate,
   onClose,
   onToggleTarget,
   onRemove,
 }) {
   const reduceMotion = useReducedMotion();
+  const { currency, rate } = useCurrency();
   const panelRef = useRef(null);
 
   useEffect(() => {
@@ -87,6 +135,8 @@ function SkillDetailPanelInner({
     : null;
   const activeTargetIds = new Set(skill.targets || []);
   const removing = busyKey === removeBusyKey(skill);
+  const lastUsed = relativeLastUsed(usage?.lastUsedAt);
+  const hasUsage = Boolean(usage && usage.invocations > 0);
 
   const transition = reduceMotion
     ? { duration: 0 }
@@ -124,7 +174,7 @@ function SkillDetailPanelInner({
         }
       >
         {/* Sticky header — title + source link + close X */}
-        <header className="flex items-start gap-3 border-b border-white/40 bg-gradient-to-b from-white/30 to-transparent px-5 pb-4 pt-5 dark:border-white/10 dark:from-white/[0.04]">
+        <header className="flex items-center gap-3 border-b border-white/40 bg-gradient-to-b from-white/30 to-transparent px-5 pb-4 pt-5 dark:border-white/10 dark:from-white/[0.04]">
           <div className="min-w-0 flex-1">
             <h2
               className="truncate text-base font-semibold text-oai-black dark:text-white"
@@ -145,14 +195,14 @@ function SkillDetailPanelInner({
                 </span>
                 <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />
               </a>
-            ) : (
+            ) : skill.directory && skill.directory !== title ? (
               <div
                 className="mt-1 truncate text-xs text-oai-gray-500 dark:text-oai-gray-400"
                 title={skill.directory}
               >
                 {skill.directory}
               </div>
-            )}
+            ) : null}
           </div>
           <button
             type="button"
@@ -164,34 +214,93 @@ function SkillDetailPanelInner({
           </button>
         </header>
 
-        {/* Scrollable body — description + sync targets */}
+        {/* Scrollable body — update banner + description + usage + sync targets */}
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+          {hasUpdate ? (
+            <div className="mb-4 flex items-center gap-3 rounded-xl bg-sky-50/80 px-3 py-2.5 ring-1 ring-sky-200 dark:bg-sky-950/30 dark:ring-sky-800/60">
+              <ArrowUpCircle className="h-4 w-4 shrink-0 text-sky-600 dark:text-sky-300" aria-hidden />
+              <span className="min-w-0 flex-1 text-xs text-sky-800 dark:text-sky-200">
+                {copy("skills.update.available")}
+              </span>
+              <button
+                type="button"
+                onClick={() => onUpdate?.(skill)}
+                disabled={updating}
+                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-sky-600 px-2.5 text-xs font-semibold text-white transition hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-400/40 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-sky-500 dark:hover:bg-sky-400"
+              >
+                {updating ? (
+                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                ) : null}
+                {copy("skills.update.action")}
+              </button>
+            </div>
+          ) : null}
           {skill.description ? (
             <p className="text-sm leading-6 text-oai-gray-600 dark:text-oai-gray-300">
               {skill.description}
             </p>
           ) : null}
 
-          <section className={skill.description ? "mt-6" : ""}>
-            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-oai-gray-500 dark:text-oai-gray-400">
+          {/* Activity — properties list (NOT a metrics dashboard). Surfaced near
+              the top because "do I use this / what does it cost" is the keep-or-cut
+              decision and the angle only a token tracker can show. */}
+          <section className="mt-6">
+            <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-oai-gray-500 dark:text-oai-gray-400">
+              {copy("skills.usage.section_title")}
+            </h3>
+            <dl className="divide-y divide-oai-gray-200/60 dark:divide-white/[0.06]">
+              <PropRow label={copy("skills.usage.invocations")}>
+                {toDisplayNumber(usage?.invocations || 0)}
+              </PropRow>
+              <PropRow label={copy("skills.usage.last_used")}>
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className={cn("h-1.5 w-1.5 rounded-full", freshnessTone(usage?.lastUsedAt))}
+                    aria-hidden
+                  />
+                  {hasUsage ? lastUsed || copy("skills.usage.unknown") : copy("skills.usage.never")}
+                </span>
+              </PropRow>
+              <PropRow
+                label={
+                  <>
+                    {copy("skills.usage.cost")}
+                    <span
+                      title={copy("skills.usage.disclaimer")}
+                      className="inline-flex cursor-help text-oai-gray-400 dark:text-oai-gray-500"
+                    >
+                      <Info className="h-3 w-3" aria-label={copy("skills.usage.disclaimer")} />
+                    </span>
+                  </>
+                }
+              >
+                {formatUsdCurrency(usage?.cost || 0, { currency, rate })}
+              </PropRow>
+            </dl>
+            {!hasUsage ? (
+              <p className="mt-2 text-[11px] leading-4 text-oai-gray-400 dark:text-oai-gray-500">
+                {copy("skills.usage.unused")}
+              </p>
+            ) : null}
+          </section>
+
+          <section className="mt-6">
+            <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-oai-gray-500 dark:text-oai-gray-400">
               {copy("skills.detail.sync_section_title")}
             </h3>
-            <div className="overflow-hidden rounded-xl bg-white/40 ring-1 ring-white/50 dark:bg-white/[0.02] dark:ring-white/10">
-              {(targets || []).map((target, index) => {
+            {/* Boxless rows: content flush-left with the heading (the -mx-2/px-2
+                keeps the hover highlight padded without indenting the checkbox).
+                No outer ring box — that was a nested card and pushed the column in. */}
+            <div>
+              {(targets || []).map((target) => {
                 const checked = activeTargetIds.has(target.id);
                 const busy = busyKey === targetBusyKey(skill.id, target.id);
-                const isLast = index === (targets || []).length - 1;
                 const rowId = `skill-detail-sync-${skill.id || skill.directory}-${target.id}`;
                 return (
                   <label
                     key={target.id}
                     htmlFor={rowId}
-                    className={
-                      "flex cursor-pointer items-center gap-3 px-3 py-2.5 text-sm text-oai-black transition-colors hover:bg-white/40 dark:text-white dark:hover:bg-white/[0.04]" +
-                      (isLast
-                        ? ""
-                        : " border-b border-white/40 dark:border-white/[0.06]")
-                    }
+                    className="-mx-2 flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm text-oai-black transition-colors hover:bg-oai-gray-100/70 dark:text-white dark:hover:bg-white/[0.05]"
                   >
                     <Checkbox.Root
                       id={rowId}
@@ -210,7 +319,9 @@ function SkillDetailPanelInner({
                         />
                       </Checkbox.Indicator>
                     </Checkbox.Root>
-                    <ProviderIcon provider={target.id} size={16} />
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center" aria-hidden>
+                      <ProviderIcon provider={target.id} size={16} />
+                    </span>
                     <span className="flex-1">{target.label}</span>
                     {busy ? (
                       <Loader2

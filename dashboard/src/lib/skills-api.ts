@@ -88,3 +88,19 @@ export function addSkillRepo(repo: AnyRecord) {
 export function removeSkillRepo(owner: string, name: string) {
   return mutateSkillsJson({ action: "remove_repo", owner, name });
 }
+
+export function getPopularSkills(options: { force?: boolean } = {}) {
+  return fetchSkillsJson({ mode: "popular", ...(options.force ? { force: 1 } : {}) });
+}
+
+export function checkSkillUpdates(options: { force?: boolean } = {}) {
+  return fetchSkillsJson({ mode: "updates", ...(options.force ? { force: 1 } : {}) });
+}
+
+export function getSkillActivity(limit = 50) {
+  return fetchSkillsJson({ mode: "activity", limit });
+}
+
+export function getSkillUsage(options: { force?: boolean } = {}) {
+  return fetchSkillsJson({ mode: "skill_usage", ...(options.force ? { force: 1 } : {}) });
+}

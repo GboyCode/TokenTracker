@@ -1704,6 +1704,73 @@ function createLocalApiHandler({ queuePath }) {
             json(res, data);
             return true;
           }
+          if (mode === "popular") {
+            const force = url.searchParams.get("force") === "1";
+            json(res, await skills.fetchPopularSkillsSh({ force }));
+            return true;
+          }
+          if (mode === "updates") {
+            const force = url.searchParams.get("force") === "1";
+            json(res, await skills.checkUpdates({ force }));
+            return true;
+          }
+          if (mode === "activity") {
+            const limit = Number(url.searchParams.get("limit") || 50);
+            json(res, { activity: skills.readActivity(limit) });
+            return true;
+          }
+          if (mode === "skill_usage") {
+            const force = url.searchParams.get("force") === "1";
+            const usage = await require("./skill-usage").scanSkillUsage({ force });
+            await ensurePricingLoaded();
+            // Join raw per-skill aggregates against installed skills so we can
+            // separate user-installed skills (where "dead weight" = unused) from
+            // Claude Code built-in tools (bash/agent/…), which dominate the logs
+            // and are NOT uninstallable. Cost is priced per-model (source=claude).
+            const installed = skills.listInstalledSkills();
+            const installedByName = new Map();
+            for (const s of installed) {
+              for (const key of [s.directory, s.name]) {
+                const norm = String(key || "").trim().toLowerCase();
+                if (norm) installedByName.set(norm, s);
+              }
+            }
+            const priced = usage.skills.map((entry) => {
+              let cost = 0;
+              for (const [model, tokens] of Object.entries(entry.models || {})) {
+                cost += computeRowCost({ ...tokens, model, source: "claude" });
+              }
+              const match = installedByName.get(String(entry.skill || "").trim().toLowerCase());
+              return {
+                skill: entry.skill,
+                invocations: entry.invocations,
+                lastUsedAt: entry.lastUsedAt,
+                tokens: entry.tokens,
+                cost,
+                installed: Boolean(match),
+                skillId: match?.id || null,
+                directory: match?.directory || null,
+              };
+            });
+            // Installed skills with zero invocations = dead-weight candidates.
+            const usedNames = new Set(usage.skills.map((s) => String(s.skill || "").trim().toLowerCase()));
+            const unusedInstalled = installed
+              .filter((s) => {
+                const dir = String(s.directory || "").trim().toLowerCase();
+                const name = String(s.name || "").trim().toLowerCase();
+                return !usedNames.has(dir) && !usedNames.has(name);
+              })
+              .map((s) => ({ skillId: s.id, directory: s.directory, name: s.name }));
+            json(res, {
+              generatedAt: usage.generatedAt,
+              scannedFiles: usage.scannedFiles,
+              totalInvocations: usage.totalInvocations,
+              cached: usage.cached,
+              skills: priced,
+              unusedInstalled,
+            });
+            return true;
+          }
           json(res, { error: "Unknown skills mode" }, 400);
           return true;
         }

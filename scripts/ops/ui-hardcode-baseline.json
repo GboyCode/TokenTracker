@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-05-29T15:59:41.740Z",
+  "generatedAt": "2026-05-30T08:16:01.808Z",
   "root": "dashboard/src",
   "rules": {
     "colors": "hex/rgb(a) literals",
     "rawText": "JSX text nodes containing letters or digits"
   },
   "totals": {
-    "colors": 246,
-    "rawText": 152
+    "colors": 262,
+    "rawText": 171
   },
   "files": {
     "dashboard/src/components/InsforgeUserHeaderControls.jsx": {
@@ -112,20 +112,22 @@
     },
     "dashboard/src/pages/SkillDetailPanel.jsx": {
       "colors": 2,
-      "rawText": 0,
-      "rawTextTokens": []
+      "rawText": 1,
+      "rawTextTokens": [
+        ") : skill.directory && skill.directory !== title ? ("
+      ]
     },
     "dashboard/src/pages/SkillsPage.jsx": {
       "colors": 4,
-      "rawText": 8,
+      "rawText": 9,
       "rawTextTokens": [
-        ") : null; const hintNode = !manageOpen && !isSkillsSh && repos.length",
+        ") : null; const hintNode = !manageOpen && !isSkillsSh && !isPopular && repos.length",
         ") : null; contentNode = (",
+        ") : source === SOURCE_POPULAR ? null : (",
         "); const browseLoadingNode = (",
         "0 ? (",
         "0 || browseAnyFilter) ? (",
-        "t.id === id)?.label || id) .join(\", \") : copy(\"skills.action.choose_targets\"); return (",
-        "t.label).join(\", \"); return ("
+        "t.id === id)?.label || id) .join(\", \") : copy(\"skills.action.choose_targets\"); return ("
       ]
     },
     "dashboard/src/pages/WidgetsPage.jsx": {
@@ -364,13 +366,35 @@
       ]
     },
     "dashboard/src/ui/marketing/MarketingLanding.jsx": {
-      "colors": 16,
-      "rawText": 3,
+      "colors": 22,
+      "rawText": 20,
       "rawTextTokens": [
         ") : ( // 未登录：Sign In 展示为主行动实色按钮，点击唤起 Modal",
         ") : signedIn ? ( // 已登录：Open Dashboard 升级为主行动实色按钮",
-        "Token Tracker"
+        "01",
+        "02",
+        "03",
+        "1,420,850",
+        "42 DAY ACTIVE STREAK",
+        "740,560",
+        "89.5% Eff.",
+        "92.1% Eff.",
+        "924,110",
+        "98.4% Eff.",
+        "ALEX",
+        "CHAMP",
+        "CHARLIE",
+        "Community Rankings (Global)",
+        "Realtime",
+        "SYSTEM: // LEADERBOARD_PREVIEW_FEED",
+        "Token Tracker",
+        "VOLT"
       ]
+    },
+    "dashboard/src/ui/marketing/components/BorderGlow.jsx": {
+      "colors": 6,
+      "rawText": 0,
+      "rawTextTokens": []
     },
     "dashboard/src/ui/marketing/components/LaserFlow.jsx": {
       "colors": 1,
@@ -379,6 +403,16 @@
     },
     "dashboard/src/ui/marketing/components/LightRays.jsx": {
       "colors": 1,
+      "rawText": 0,
+      "rawTextTokens": []
+    },
+    "dashboard/src/ui/marketing/components/SpotlightCard.jsx": {
+      "colors": 2,
+      "rawText": 0,
+      "rawTextTokens": []
+    },
+    "dashboard/src/ui/marketing/components/TiltedCard.jsx": {
+      "colors": 2,
       "rawText": 0,
       "rawTextTokens": []
     },
