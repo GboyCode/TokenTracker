@@ -111,6 +111,36 @@ test("workflow has correct step order: dashboard → bundle → xcode → dmg �
   }
 });
 
+test("release is created as a draft and only published after both builds", () => {
+  const content = loadWorkflow();
+  // create-release makes a DRAFT so releases/latest never shows a partial
+  // release while assets upload in parallel.
+  assert.ok(
+    /gh release create[^\n]*--draft/.test(content),
+    "create-release must create a --draft release"
+  );
+  // A publish job flips it live, gated on BOTH platform builds.
+  assert.ok(/^\s{2}publish:/m.test(content), "must have a publish job");
+  assert.ok(
+    /publish:\s*\n\s*needs:\s*\[build,\s*windows\]/.test(content),
+    "publish must need both build and windows"
+  );
+  assert.ok(
+    /gh release edit[^\n]*--draft=false/.test(content),
+    "publish must un-draft the release"
+  );
+});
+
+test("homebrew tap is notified only after publish (not mid-build)", () => {
+  const content = loadWorkflow();
+  // The dispatch must come AFTER the un-draft, so the tap fetches a public,
+  // fully-populated release — never a draft or an asset-less one.
+  const undraft = content.indexOf("--draft=false");
+  const dispatch = content.indexOf("homebrew-tokentracker/dispatches");
+  assert.ok(undraft > 0 && dispatch > 0, "both un-draft and dispatch must exist");
+  assert.ok(dispatch > undraft, "homebrew dispatch must come after un-drafting");
+});
+
 test("workflow has concurrency guard", () => {
   const content = loadWorkflow();
   assert.ok(content.includes("concurrency:"));

@@ -13,10 +13,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Create (or reuse) the vX.Y.Z release FIRST so the macOS and Windows build
-  # jobs can run in PARALLEL and each just uploads its own assets with
-  # --clobber — no create-vs-create race, and Windows no longer waits on the
-  # macOS build. Cheap (~10s on ubuntu).
+  # Create the vX.Y.Z release as a DRAFT first, so the macOS and Windows build
+  # jobs can upload their assets to it IN PARALLEL while it stays invisible.
+  # Drafts are excluded from releases/latest and the public releases page, so
+  # consumers (the Homebrew tap, the landing "Download" deep-link, anyone
+  # browsing) never see a half-published release — releases/latest stays on the
+  # PREVIOUS complete version until the publish job flips this one live, once
+  # every asset is attached. Cheap (~10s on ubuntu).
   create-release:
     runs-on: ubuntu-latest
     permissions:
@@ -25,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Create or reuse the GitHub release
+      - name: Create or reuse the draft GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -33,7 +36,7 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists — reusing."
           else
-            gh release create "$tag" --title "$tag" --generate-notes
+            gh release create "$tag" --draft --title "$tag" --generate-notes
           fi
 
   build:
@@ -213,9 +216,10 @@ jobs:
           echo "App path: $APP_PATH"
           bash scripts/create-dmg.sh "$APP_PATH"
 
-      # 6. Attach the DMG to the release that create-release already made.
+      # 6. Attach the DMG to the draft release that create-release made.
       # --clobber so re-runs replace the asset; the Windows job uploads its own
-      # assets to the same release in parallel.
+      # assets to the same draft in parallel. The release is still a draft here,
+      # so nothing is public yet — the publish job flips it live.
       - name: Upload DMG to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -223,9 +227,36 @@ jobs:
           gh release upload "v${{ inputs.version }}" \
             TokenTrackerBar/build/TokenTrackerBar.dmg --clobber
 
-      # 7. Notify homebrew-tokentracker tap to bump the Cask immediately.
-      # If HOMEBREW_DISPATCH_TOKEN is not set, this step silently no-ops and
-      # the tap's own hourly cron picks up the new release within ~1 hour.
+  # Build + attach the Windows tray app to the SAME vX.Y.Z release, so one
+  # `gh workflow run "release DMG" -f version=X.Y.Z` ships both platforms.
+  # `needs: create-release` (NOT `needs: build`) so Windows builds in PARALLEL
+  # with the macOS DMG — both just upload to the already-created release.
+  windows:
+    needs: create-release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-windows.yml
+    with:
+      version: ${{ inputs.version }}
+
+  # Flip the draft live ONLY after BOTH platforms finished uploading, so the
+  # release appears complete and atomically — releases/latest stays on the
+  # previous version until this instant, never a partial release. If either
+  # build fails, the release stays a draft (invisible) instead of going public
+  # half-empty. The Homebrew tap is notified HERE (not in the build job) so it
+  # fetches a release that is both public and fully populated — fixing the race
+  # where the tap saw vX.Y.Z before the DMG asset existed.
+  publish:
+    needs: [build, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "v${{ inputs.version }}" --draft=false --latest --repo "$GITHUB_REPOSITORY"
+
       - name: Dispatch homebrew tap update
         env:
           HOMEBREW_DISPATCH_TOKEN: ${{ secrets.HOMEBREW_DISPATCH_TOKEN }}
@@ -241,15 +272,3 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             https://api.github.com/repos/mm7894215/homebrew-tokentracker/dispatches \
             -d "{\"event_type\":\"tokentracker-release\",\"client_payload\":{\"source\":\"dmg\",\"version\":\"$VERSION\"}}"
-
-  # Build + attach the Windows tray app to the SAME vX.Y.Z release, so one
-  # `gh workflow run "release DMG" -f version=X.Y.Z` ships both platforms.
-  # `needs: create-release` (NOT `needs: build`) so Windows builds in PARALLEL
-  # with the macOS DMG — both just upload to the already-created release.
-  windows:
-    needs: create-release
-    permissions:
-      contents: write
-    uses: ./.github/workflows/release-windows.yml
-    with:
-      version: ${{ inputs.version }}
