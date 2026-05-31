@@ -206,3 +206,45 @@ test("bundled Chinese language files exist as UTF-8 with BOM", () => {
     );
   }
 });
+
+// ── Linked release: one DMG dispatch ships BOTH platforms ──────────────────
+// release-windows is a reusable workflow (workflow_call) that the macOS DMG
+// workflow invokes, so `gh workflow run "release DMG"` fans out to Windows too.
+
+const DMG_WORKFLOW_PATH = path.join(
+  __dirname,
+  "..",
+  ".github",
+  "workflows",
+  "release-dmg.yml"
+);
+
+test("release-windows is callable as a reusable workflow", () => {
+  const content = loadWorkflow();
+  assert.ok(
+    content.includes("workflow_call:"),
+    "must expose workflow_call so the DMG workflow can invoke it"
+  );
+});
+
+test("release-dmg invokes release-windows so one dispatch ships both platforms", () => {
+  const dmg = fs.readFileSync(DMG_WORKFLOW_PATH, "utf8");
+  assert.ok(
+    /uses:\s*\.\/\.github\/workflows\/release-windows\.yml/.test(dmg),
+    "DMG workflow must call the Windows reusable workflow"
+  );
+  assert.ok(
+    /version:\s*\$\{\{\s*inputs\.version\s*\}\}/.test(dmg),
+    "DMG workflow must pass its version input through to Windows"
+  );
+});
+
+test("Windows release job waits for the macOS job (no create-vs-create race)", () => {
+  const dmg = fs.readFileSync(DMG_WORKFLOW_PATH, "utf8");
+  // The Windows job must `needs: build` so the macOS job creates the vX.Y.Z
+  // release first; Windows then uploads with --clobber.
+  assert.ok(
+    /windows:\s*\n\s*needs:\s*build/.test(dmg),
+    "windows job must declare `needs: build`"
+  );
+});

@@ -1,15 +1,25 @@
 name: release Windows
 
 on:
+  # Manual one-off Windows-only release.
   workflow_dispatch:
     inputs:
       version:
         description: "Version to release (e.g. 0.31.1)"
         required: true
         type: string
+  # Reusable: the macOS "release DMG" workflow calls this so a single dispatch
+  # ships both platforms to the same vX.Y.Z release (see release-dmg.yml).
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
 
 concurrency:
-  group: release-windows
+  # Per-version group so the macOS-triggered call and a stray manual dispatch
+  # for the SAME version can't race; different versions still run independently.
+  group: release-windows-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
