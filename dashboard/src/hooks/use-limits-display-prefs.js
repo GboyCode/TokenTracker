@@ -14,38 +14,16 @@ import {
  * inside the macOS app so the dashboard, menu bar, and popover render the same mode.
  */
 
-const ALL_LIMIT_PROVIDERS = [
-  "claude",
-  "codex",
-  "cursor",
-  "gemini",
-  "kimi",
-  "kiro",
-  "copilot",
-  "antigravity",
-];
+import {
+  LIMIT_PROVIDER_ICON_KEYS,
+  LIMIT_PROVIDER_IDS,
+  limitProviderIconKey,
+  limitProviderName,
+} from "../lib/limits-providers.js";
 
-export const LIMIT_PROVIDER_NAMES = {
-  claude: "Claude",
-  codex: "Codex",
-  cursor: "Cursor",
-  gemini: "Gemini",
-  kimi: "Kimi",
-  kiro: "Kiro",
-  copilot: "GitHub Copilot",
-  antigravity: "Antigravity",
-};
+const ALL_LIMIT_PROVIDERS = LIMIT_PROVIDER_IDS;
 
-export const LIMIT_PROVIDER_ICONS = {
-  claude: "/brand-logos/claude-code.svg",
-  codex: "/brand-logos/codex.svg",
-  cursor: "/brand-logos/cursor.svg",
-  gemini: "/brand-logos/gemini.svg",
-  kimi: "/brand-logos/kimi.svg",
-  kiro: "/brand-logos/kiro.svg",
-  copilot: "/brand-logos/copilot.svg",
-  antigravity: "/brand-logos/antigravity.svg",
-};
+export { LIMIT_PROVIDER_ICON_KEYS, limitProviderIconKey, limitProviderName };
 
 const ORDER_KEY = "tt.limits.providerOrder";
 const VISIBILITY_KEY = "tt.limits.providerVisibility";
