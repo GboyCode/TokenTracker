@@ -76,6 +76,7 @@ final class NativeBridge {
             flag(limits.gemini.configured, limits.gemini.error),
             flag(limits.kimi?.configured ?? false, limits.kimi?.error),
             flag(limits.kiro.configured, limits.kiro.error),
+            flag(limits.grok?.configured ?? false, limits.grok?.error),
             flag(limits.copilot?.configured ?? false, limits.copilot?.error),
             flag(limits.antigravity.configured, limits.antigravity.error),
         ].joined()

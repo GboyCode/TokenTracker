@@ -26,3 +26,17 @@ test("NativeBridge pushes settings when sync state changes", () => {
     "sync state changes should be pushed to the dashboard settings UI",
   );
 });
+
+test("NativeBridge availability fingerprint tracks every gated provider", () => {
+  const source = fs.readFileSync(nativeBridgePath, "utf8");
+
+  // The dropdown only re-pushes when the fingerprint changes. Any provider that
+  // availableItemsPayload gates on isProviderAvailable() must be fingerprinted,
+  // or its availability flip won't reach an already-open Widgets page.
+  for (const provider of ["kimi", "kiro", "grok", "copilot", "antigravity"]) {
+    assert.ok(
+      source.includes(`limits.${provider}`),
+      `availability fingerprint must reference ${provider} so the dropdown re-pushes when its limits flip available/unavailable`,
+    );
+  }
+});
