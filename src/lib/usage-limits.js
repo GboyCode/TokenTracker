@@ -181,10 +181,20 @@ function classifyCodexWindow(window) {
   return null;
 }
 
+function normalizeCodexRateWindow(window) {
+  if (!window || typeof window !== "object" || Array.isArray(window)) return null;
+  const usedPercent = clampPercent(window.used_percent);
+  if (usedPercent === null) return null;
+  return {
+    ...window,
+    used_percent: Math.round(usedPercent),
+  };
+}
+
 function normalizeCodexRateWindows(rateLimit) {
-  const candidates = [rateLimit?.primary_window, rateLimit?.secondary_window].filter(
-    (w) => w && typeof w === "object",
-  );
+  const primary = normalizeCodexRateWindow(rateLimit?.primary_window);
+  const secondary = normalizeCodexRateWindow(rateLimit?.secondary_window);
+  const candidates = [primary, secondary].filter(Boolean);
   let session = null;
   let weekly = null;
   for (const w of candidates) {
@@ -196,11 +206,86 @@ function normalizeCodexRateWindows(rateLimit) {
   // from unexpected window durations rather than dropping it silently.
   if (!session && !weekly && candidates.length > 0) {
     return {
-      primary_window: candidates[0] ?? null,
-      secondary_window: candidates[1] ?? null,
+      primary_window: primary,
+      secondary_window: secondary,
     };
   }
   return { primary_window: session, secondary_window: weekly };
+}
+
+function isCodexSparkLimit(entry) {
+  if (!entry || typeof entry !== "object") return false;
+  return [entry.limit_name, entry.metered_feature].some((value) => (
+    typeof value === "string" && value.trim().toLowerCase().includes("spark")
+  ));
+}
+
+function codexSparkFallbackCandidates(primary, secondary) {
+  const primaryKind = classifyCodexWindow(primary);
+  const secondaryKind = classifyCodexWindow(secondary);
+  const out = [];
+  const primaryDurationMissing = primary
+    && (primary.limit_window_seconds === undefined
+      || primary.limit_window_seconds === null
+      || primary.limit_window_seconds === "");
+
+  if (primaryKind || secondaryKind) {
+    if (!primaryKind && primary && secondaryKind === "weekly") {
+      out.push({ kind: "session", window: primary });
+    }
+    if (!primaryKind && primaryDurationMissing && secondaryKind === "session") {
+      out.push({ kind: "weekly", window: primary });
+    }
+    if (!secondaryKind && secondary && primaryKind === "weekly") {
+      out.push({ kind: "session", window: secondary });
+    }
+    if (!secondaryKind && secondary && primaryKind === "session") {
+      out.push({ kind: "weekly", window: secondary });
+    }
+    return out;
+  }
+
+  if (primary) out.push({ kind: "session", window: primary });
+  if (secondary) out.push({ kind: "weekly", window: secondary });
+  return out;
+}
+
+function normalizeCodexSparkRateWindows(additionalRateLimits) {
+  let session = null;
+  let weekly = null;
+  if (!Array.isArray(additionalRateLimits)) {
+    return { spark_primary_window: null, spark_secondary_window: null };
+  }
+
+  const classifiedCandidates = [];
+  const fallbackCandidates = [];
+  for (const entry of additionalRateLimits) {
+    if (!isCodexSparkLimit(entry)) continue;
+    const rateLimit = entry.rate_limit;
+    if (!rateLimit || typeof rateLimit !== "object") continue;
+
+    const primary = normalizeCodexRateWindow(rateLimit.primary_window);
+    const secondary = normalizeCodexRateWindow(rateLimit.secondary_window);
+    for (const window of [primary, secondary]) {
+      const kind = classifyCodexWindow(window);
+      if (kind) classifiedCandidates.push({ kind, window });
+    }
+    fallbackCandidates.push(...codexSparkFallbackCandidates(primary, secondary));
+  }
+
+  for (const candidate of classifiedCandidates) {
+    if (candidate.kind === "session" && !session) session = candidate.window;
+    else if (candidate.kind === "weekly" && !weekly) weekly = candidate.window;
+  }
+  for (const candidate of fallbackCandidates) {
+    if (candidate.kind === "session" && !session) session = candidate.window;
+    else if (candidate.kind === "weekly" && !weekly) weekly = candidate.window;
+  }
+
+  return {
+    spark_primary_window: session,
+    spark_secondary_window: weekly,
+  };
 }
 
 async function fetchCodexUsageLimits(
@@ -224,13 +309,21 @@ async function fetchCodexUsageLimits(
   // 401/403/404 from wham means "no usage data available for this auth state" — render
   // a neutral empty state instead of a red "Fetch failed" error.
   if (res.status === 401 || res.status === 403 || res.status === 404) {
-    return { primary_window: null, secondary_window: null };
+    return {
+      primary_window: null,
+      secondary_window: null,
+      spark_primary_window: null,
+      spark_secondary_window: null,
+    };
   }
   if (!res.ok) {
     throw new Error(`Codex API returned ${res.status}`);
   }
   const body = await res.json();
-  return normalizeCodexRateWindows(body.rate_limit || {});
+  return {
+    ...normalizeCodexRateWindows(body.rate_limit || {}),
+    ...normalizeCodexSparkRateWindows(body.additional_rate_limits),
+  };
 }
 
 function cursorPercentFromCentsUsedLimit(usedRaw, limitRaw) {
@@ -1920,6 +2013,8 @@ async function getUsageLimits({
       plan_type: codexPlanType || null,
       primary_window: codexResult.value.primary_window,
       secondary_window: codexResult.value.secondary_window,
+      spark_primary_window: codexResult.value.spark_primary_window,
+      spark_secondary_window: codexResult.value.spark_secondary_window,
     };
   }
 
