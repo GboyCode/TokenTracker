@@ -122,6 +122,15 @@ const CLAUDE_MEM_OBSERVER_PATH_SEGMENT = "--claude-mem-observer-sessions";
 // for whatever data is actually on disk. A targeted, log-gap-safe mimo
 // migration will ship later under its own key.
 const CLAUDE_GROUND_TRUTH_REPAIR_KEY = "claudeGroundTruthRepair_2026_05_v4";
+// One-time full re-upload: the cloud ingest dropped `conversation_count` to 0
+// from 2026-04-18 until the 2026-06-10 field-mapping fix (it read
+// `b.conversations`; queue rows carry `conversation_count`). Historical cloud
+// rows can only be repaired from each user's local queue.jsonl — resetting the
+// upload offset replays the full queue and the ingest's whole-row upsert
+// overwrites every historical bucket with the correct conversation counts
+// (token columns replay to the same final values: last emission per key wins,
+// exactly how the cloud rows were built the first time).
+const CLOUD_CONVERSATIONS_BACKFILL_KEY = "cloudConversationsBackfill_2026_06";
 
 function warnProviderParseFailure(label, err, opts) {
   if (opts?.auto) return;
@@ -1024,6 +1033,8 @@ async function cmdSync(argv) {
       }
     }
 
+    await applyCloudConversationsBackfill({ cursors, queueStatePath });
+
     cursors.updatedAt = new Date().toISOString();
     await writeJson(cursorsPath, cursors);
     if (grokHookSignalConsumed && grokHookSignalPath) {
@@ -1199,10 +1210,12 @@ module.exports = {
   migrateRolloutCumulativeDeltaBuckets,
   reincludeClaudeMemObserverFiles,
   repairGrokQueueFromSessionSnapshots,
+  applyCloudConversationsBackfill,
   CURSOR_UNKNOWN_MIGRATION_KEY,
   ROLLOUT_CUMULATIVE_DELTA_MIGRATION_KEY,
   CLAUDE_MEM_OBSERVER_REINCLUDE_KEY,
   GROK_APPEND_ONLY_REPAIR_MIGRATION_KEY,
+  CLOUD_CONVERSATIONS_BACKFILL_KEY,
 };
 
 function normalizeString(value) {
@@ -1562,6 +1575,12 @@ async function readQueueBatch(queuePath, startOffset, maxBuckets) {
     const model = (typeof bucket?.model === "string" ? bucket.model.trim() : "") || "unknown";
     bucket.source = source;
     bucket.model = model;
+    // Apply the same legacy-row corrections every local reader applies
+    // (local-api readQueueData / project queue / wrapped aggregator). Without
+    // this the cloud permanently kept the RAW legacy values — e.g. old Codex
+    // rows whose input_tokens still include cached tokens (6-7x inflated) —
+    // while the local dashboard showed corrected numbers.
+    bucket = require("../lib/local-api").normalizeQueueRow(bucket);
     bucketMap.set(`${source}|${model}|${hourStart}`, bucket);
     linesRead += 1;
     if (linesRead >= maxBuckets) break;
@@ -1908,6 +1927,32 @@ async function repairGrokQueueFromSessionSnapshots({ cursors, queuePath, queueSt
     queueStateBackupPath,
   };
   return true;
+}
+
+async function applyCloudConversationsBackfill({ cursors, queueStatePath }) {
+  if (!cursors || typeof cursors !== "object") return false;
+  cursors.migrations = cursors.migrations || {};
+  if (cursors.migrations[CLOUD_CONVERSATIONS_BACKFILL_KEY]) return false;
+
+  // Reset ONLY the cloud upload offset. The queue file itself is untouched;
+  // ingest upserts are idempotent per (user, device, hour, source, model),
+  // so replaying the whole queue is safe — it costs upload batches, not
+  // correctness. Project queue is never uploaded and is not touched.
+  let prevOffset = 0;
+  try {
+    const st = (await readJson(queueStatePath)) || {};
+    prevOffset = Number(st.offset || 0);
+  } catch (_e) {
+    /* missing state file — nothing to reset */
+  }
+  if (prevOffset > 0) {
+    await writeJson(queueStatePath, { offset: 0, updatedAt: new Date().toISOString() });
+  }
+  cursors.migrations[CLOUD_CONVERSATIONS_BACKFILL_KEY] = {
+    appliedAt: new Date().toISOString(),
+    previousOffset: prevOffset,
+  };
+  return prevOffset > 0;
 }
 
 async function migrateCursorUnknownBuckets({ cursors, queuePath }) {
