@@ -436,6 +436,33 @@ test("index: ensurePricingLoaded + getModelPricing returns CURATED for kiro entr
   assert.equal(kiro.cache_write, 3.75);
 });
 
+test("index: getModelPricing resolves claude-fable-5 from CURATED (not yet in LiteLLM)", async () => {
+  pricing.resetPricingForTests();
+  const cachePath = tmpCachePath();
+  await pricing.ensurePricingLoaded({
+    cachePath,
+    fetchImpl: makeFetchImpl(FIXTURE_LITELLM),
+  });
+  // Fable 5 is Anthropic's top tier ($10/$50) and absent from LiteLLM, so the
+  // curated exact entry must win or the dashboard renders $0 cost.
+  const fable = pricing.getModelPricing("claude-fable-5");
+  assert.equal(fable.input, 10);
+  assert.equal(fable.output, 50);
+  assert.equal(fable.cache_read, 1);
+  assert.equal(fable.cache_write, 12.5);
+  // End-to-end: a row must produce non-zero cost.
+  const cost = pricing.computeRowCost({
+    source: "claude",
+    model: "claude-fable-5",
+    input_tokens: 1_000_000,
+    output_tokens: 0,
+    cached_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    reasoning_output_tokens: 0,
+  });
+  assert.equal(cost, 10);
+});
+
 test("index: getModelPricing finds LiteLLM mainstream models with correct unit conversion", async () => {
   pricing.resetPricingForTests();
   const cachePath = tmpCachePath();
