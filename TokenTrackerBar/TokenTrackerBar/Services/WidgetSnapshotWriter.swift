@@ -211,6 +211,10 @@ enum WidgetSnapshotWriter {
 
     private static func limitProviders(from limits: UsageLimitsResponse?) -> [LimitProvider] {
         guard let limits else { return [] }
+        // Honor the user's Limits Display visibility preferences — the
+        // dashboard, popover and menu bar all hide these providers, so the
+        // desktop widget must not keep showing them (PR #168 follow-up).
+        let hiddenProviders = LimitsSettingsStore.shared.hiddenProviders
         var out: [LimitProvider] = []
 
         // Claude — `utilization` from /tokentracker-usage-limits is a 0–100
@@ -336,7 +340,7 @@ enum WidgetSnapshotWriter {
             }
         }
 
-        return out
+        return out.filter { !hiddenProviders.contains($0.source) }
     }
 
     private static let iso8601: ISO8601DateFormatter = {

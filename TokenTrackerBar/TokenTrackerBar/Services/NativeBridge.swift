@@ -125,14 +125,18 @@ final class NativeBridge {
             keepingSelected: menuBarItems,
             hiddenProviders: hiddenProviders
         )
+        // Filter the PAYLOAD against currently-available ids, but never persist
+        // the pruned list. Availability is transient state: a single 4xx from a
+        // provider (e.g. Codex wham during token refresh) yields a "healthy but
+        // windowless" response, and persisting the prune permanently erased the
+        // user's saved metric selection — it never came back when the provider
+        // recovered. Junk/duplicate ids are still self-healed by
+        // MenuBarDisplayPreferences.read(), which normalizes against the full
+        // metric universe; rendering defensively skips unavailable metrics.
         let normalizedMenuBarItems = MenuBarDisplayPreferences.normalize(
             menuBarItems,
             allowedIDs: Set(availableItemIDs)
         )
-        if normalizedMenuBarItems != menuBarItems {
-            MenuBarDisplayPreferences.write(normalizedMenuBarItems)
-            NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
-        }
         let payload: [String: Any] = [
             "showStats": UserDefaults.standard.object(forKey: "MenuBarShowStats") as? Bool ?? true,
             "menuBarItems": normalizedMenuBarItems,

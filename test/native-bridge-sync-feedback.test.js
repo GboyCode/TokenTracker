@@ -65,14 +65,21 @@ test("NativeBridge self-heals saved menu bar selections against available items"
     /let\s+normalizedMenuBarItems\s*=\s*MenuBarDisplayPreferences\.normalize\(\s*menuBarItems,\s*allowedIDs:\s*Set\(availableItemIDs\)\s*\)/,
     "saved menu-bar ids should be normalized against selectable ids",
   );
-  assert.match(
+  // Regression (2026-06 audit): pushSettings must NOT persist the
+  // availability-pruned selection. Availability is transient — a single 4xx
+  // from a provider yields a "healthy but windowless" limits response, and
+  // persisting the prune permanently erased the user's saved metric
+  // selection. The payload is filtered; the stored selection stays intact
+  // (MenuBarDisplayPreferences.read() still self-heals junk ids against the
+  // full metric universe).
+  assert.doesNotMatch(
     source,
-    /if\s+normalizedMenuBarItems\s*!=\s*menuBarItems\s*\{[\s\S]*?MenuBarDisplayPreferences\.write\(normalizedMenuBarItems\)[\s\S]*?NotificationCenter\.default\.post\(name:\s*\.nativeSettingsChanged,\s*object:\s*nil\)[\s\S]*?\}/,
-    "invalid saved ids should be persisted back and refresh the native status bar",
+    /if\s+normalizedMenuBarItems\s*!=\s*menuBarItems\s*\{[\s\S]*?MenuBarDisplayPreferences\.write\(normalizedMenuBarItems\)/,
+    "pushSettings must not persist availability-pruned menu bar selections",
   );
   assert.match(
     source,
     /"menuBarItems":\s*normalizedMenuBarItems/,
-    "settings payload should expose the self-healed selection",
+    "settings payload should expose the availability-filtered selection",
   );
 });
