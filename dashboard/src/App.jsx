@@ -52,6 +52,9 @@ const LimitsPage = lazy(() =>
 const LoginPage = lazy(() =>
   import("./pages/LoginPage.jsx").then((m) => ({ default: m.LoginPage })),
 );
+const ResetPasswordPage = lazy(() =>
+  import("./pages/ResetPasswordPage.jsx").then((m) => ({ default: m.ResetPasswordPage })),
+);
 const DevicePage = lazy(() => import("./pages/DevicePage.jsx"));
 const WrappedPage = lazy(() => import("./pages/WrappedPage.jsx"));
 const SettingsPage = lazy(() =>
@@ -231,6 +234,7 @@ export default function App() {
     !isLeaderboardPath &&
     !profileUserId &&
     normalizedPath !== "/login" &&
+    normalizedPath !== "/reset-password" &&
     normalizedPath !== "/landing" &&
     normalizedPath !== "/auth/callback" &&
     normalizedPath !== "/auth/native-callback";
@@ -243,6 +247,8 @@ export default function App() {
     content = <NativeAuthCallbackPage />;
   } else if (normalizedPath === "/login") {
     content = <LoginPage />;
+  } else if (normalizedPath === "/reset-password") {
+    content = <ResetPasswordPage />;
   } else if (normalizedPath === "/device") {
     // Headless-CLI device-flow approval page. Standalone (no sidebar) so
     // unsigned visitors hit the embedded sign-in CTA without sidebar nav

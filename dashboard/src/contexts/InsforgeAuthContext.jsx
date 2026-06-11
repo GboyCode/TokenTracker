@@ -204,6 +204,30 @@ export function InsforgeAuthProvider({ children }) {
     [client],
   );
 
+  const sendResetPasswordEmail = useCallback(
+    async (request) => {
+      if (!client) return { data: null, error: new Error("InsForge client not configured") };
+      return client.auth.sendResetPasswordEmail(request);
+    },
+    [client],
+  );
+
+  const exchangeResetPasswordToken = useCallback(
+    async (request) => {
+      if (!client) return { data: null, error: new Error("InsForge client not configured") };
+      return client.auth.exchangeResetPasswordToken(request);
+    },
+    [client],
+  );
+
+  const resetPassword = useCallback(
+    async (request) => {
+      if (!client) return { data: null, error: new Error("InsForge client not configured") };
+      return client.auth.resetPassword(request);
+    },
+    [client],
+  );
+
   const getPublicAuthConfig = useCallback(async () => {
     if (!client) return { data: null, error: new Error("InsForge client not configured") };
     return client.auth.getPublicAuthConfig();
@@ -282,6 +306,9 @@ export function InsforgeAuthProvider({ children }) {
         signInWithOAuth: async () => ({ error: new Error("InsForge not configured") }),
         signInWithPassword: async () => ({ data: null, error: new Error("InsForge not configured") }),
         signUp: async () => ({ data: null, error: new Error("InsForge not configured") }),
+        sendResetPasswordEmail: async () => ({ data: null, error: new Error("InsForge not configured") }),
+        exchangeResetPasswordToken: async () => ({ data: null, error: new Error("InsForge not configured") }),
+        resetPassword: async () => ({ data: null, error: new Error("InsForge not configured") }),
         getPublicAuthConfig: async () => ({ data: null, error: new Error("InsForge not configured") }),
         signOut: async () => {},
         getAccessToken: async () => null,
@@ -299,6 +326,9 @@ export function InsforgeAuthProvider({ children }) {
       signInWithOAuth,
       signInWithPassword,
       signUp,
+      sendResetPasswordEmail,
+      exchangeResetPasswordToken,
+      resetPassword,
       getPublicAuthConfig,
       signOut,
       getAccessToken,
@@ -313,6 +343,9 @@ export function InsforgeAuthProvider({ children }) {
     signInWithOAuth,
     signInWithPassword,
     signUp,
+    sendResetPasswordEmail,
+    exchangeResetPasswordToken,
+    resetPassword,
     getPublicAuthConfig,
     signOut,
     getAccessToken,

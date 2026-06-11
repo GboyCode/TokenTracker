@@ -15,9 +15,23 @@ login.field.name,shared,LoginPage,LoginPage,field_name,"Display name",,active
 login.field.name_placeholder,shared,LoginPage,LoginPage,name_placeholder,"Optional",,active
 login.field.email,shared,LoginPage,LoginPage,field_email,"Email",,active
 login.field.password,shared,LoginPage,LoginPage,field_password,"Password",,active
+login.forgot_password,shared,LoginPage,LoginPage,forgot_password,"Forgot password?",,active
 login.password_hint,shared,LoginPage,LoginPage,pw_hint,"At least {{min}} characters.",,active
 login.submit.sign_in,shared,LoginPage,LoginPage,submit_sign_in,"Sign in with email",,active
 login.submit.sign_up,shared,LoginPage,LoginPage,submit_sign_up,"Create account",,active
+reset_password.back_to_sign_in,shared,ResetPasswordPage,ResetPasswordPage,back_to_sign_in,"Back to sign in",,active
+reset_password.title,shared,ResetPasswordPage,ResetPasswordPage,title,"Reset password",,active
+reset_password.subtitle,shared,ResetPasswordPage,ResetPasswordPage,subtitle,"Enter your email to receive a reset link.",,active
+reset_password.request.submit,shared,ResetPasswordPage,ResetPasswordPage,request_submit,"Send reset link",,active
+reset_password.request.sent,shared,ResetPasswordPage,ResetPasswordPage,request_sent,"Check email for reset link & code.",,active
+reset_password.field.code,shared,ResetPasswordPage,ResetPasswordPage,field_code,"Reset code",,active
+reset_password.field.new_password,shared,ResetPasswordPage,ResetPasswordPage,field_new_password,"New password",,active
+reset_password.field.confirm_password,shared,ResetPasswordPage,ResetPasswordPage,field_confirm_password,"Confirm password",,active
+reset_password.reset.submit,shared,ResetPasswordPage,ResetPasswordPage,reset_submit,"Reset password",,active
+reset_password.error.password_mismatch,shared,ResetPasswordPage,ResetPasswordPage,error_password_mismatch,"Passwords do not match.",,active
+reset_password.error.missing_token,shared,ResetPasswordPage,ResetPasswordPage,error_missing_token,"Reset token is missing. Request a new reset link.",,active
+reset_password.success,shared,ResetPasswordPage,ResetPasswordPage,success,"Password updated. You can sign in with the new password.",,active
+reset_password.success_cta,shared,ResetPasswordPage,ResetPasswordPage,success_cta,"Return to sign in",,active
 login_modal.subtitle,shared,*,LoginModal,subtitle,"Sign in to join the leaderboard",,active
 login_modal.continue_email,shared,*,LoginModal,continue_email,"Continue with Email",,active
 login_modal.divider_email,shared,*,LoginModal,divider_email,"email",,active
