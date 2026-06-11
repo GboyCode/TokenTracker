@@ -46,10 +46,6 @@ class DashboardViewModel: ObservableObject {
     @Published var modelBreakdown: ModelBreakdownResponse?
     @Published var projectUsage: ProjectUsageResponse?
     @Published var usageLimits: UsageLimitsResponse?
-    /// Last error from the best-effort usage-limits fetch (if any). When non-nil
-    /// the UI should show a prompt while still rendering `usageLimits` (the last
-    /// good record). Only set on hard failure (throw); cleared on successful fetch.
-    @Published var limitsError: String?
 
     @Published var isLoading = false
     @Published var isSyncing = false
@@ -205,8 +201,7 @@ class DashboardViewModel: ObservableObject {
             }
             // Usage limits (best-effort, non-fatal)
             // On hard failure (throw) we retain the previous `usageLimits` record (if any)
-            // so the popover/widget/menu stats continue to show the last known progress bars,
-            // while `limitsError` carries the message for a visible prompt.
+            // so the popover/widget/menu stats continue to show the last known progress bars.
             // On success we only overwrite the display record when the response actually
             // contains usable data (prevents losing the last good snapshot on an all-error
             // response from the server). Per-provider errors inside an otherwise-usable
@@ -214,7 +209,6 @@ class DashboardViewModel: ObservableObject {
             group.addTask { @MainActor in
                 do {
                     let newLimits = try await APIClient.shared.fetchUsageLimits()
-                    self.limitsError = nil
                     self.usageLimits = UsageLimitsResponse.displayRecord(
                         current: self.usageLimits,
                         incoming: newLimits
@@ -222,7 +216,6 @@ class DashboardViewModel: ObservableObject {
                 } catch {
                     // Non-fatal: usage limits are best-effort, don't increment errorCount.
                     // Retain whatever `usageLimits` we had before (the "last record").
-                    self.limitsError = error.localizedDescription
                 }
             }
         }
