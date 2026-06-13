@@ -1922,6 +1922,8 @@ async function fetchAntigravityLimits({ home, commandRunner, requestFn, timeoutM
       return finalize(modelConfigs, { fallbackToConfigs: true });
     }
   } catch (error) {
+    const cached = readAntigravityLimitsCache({ home, nowMs });
+    if (cached) return cached;
     const message = error?.message === "timeout"
       ? "Antigravity quota request timed out."
       : error?.message || "Unknown error";

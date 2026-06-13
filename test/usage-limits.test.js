@@ -1735,6 +1735,71 @@ lang 123 me 22u IPv4 0x123 0t0 TCP 127.0.0.1:51234 (LISTEN)
     }
   });
 
+  it("uses cached Antigravity quota when the live quota request times out", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-antigravity-cache-timeout-"));
+    try {
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(trackerDir, "usage-limits-cache.json"),
+        JSON.stringify({
+          antigravity: {
+            primary_window: {
+              used_percent: 42,
+              reset_at: "2026-05-22T00:00:00.000Z",
+            },
+            secondary_window: {
+              used_percent: 18,
+              reset_at: "2026-05-22T00:00:00.000Z",
+            },
+            cached_at: "2026-05-21T00:00:00.000Z",
+          },
+        }),
+        "utf8",
+      );
+      const commandRunner = (command) => {
+        if (command === "/bin/ps") {
+          return {
+            stdout: `
+123 /Applications/Antigravity.app/Contents/MacOS/language_server_macos --app_data_dir antigravity --csrf_token abc123 --extension_server_port 42427
+`,
+            status: 0,
+          };
+        }
+        if (command === "which") {
+          return { stdout: "/usr/bin/lsof\n", status: 0 };
+        }
+        if (String(command).endsWith("lsof")) {
+          return {
+            stdout: `
+lang 123 me 22u IPv4 0x123 0t0 TCP 127.0.0.1:51234 (LISTEN)
+`,
+            status: 0,
+          };
+        }
+        return { stdout: "", stderr: "", status: 1 };
+      };
+      const requestFn = async () => {
+        throw new Error("timeout");
+      };
+
+      const result = await fetchAntigravityLimits({
+        home: tmp,
+        commandRunner,
+        requestFn,
+        nowMs: Date.parse("2026-05-21T01:00:00.000Z"),
+      });
+
+      assert.equal(result.configured, true);
+      assert.equal(result.cached, true);
+      assert.equal(result.error, null);
+      assert.equal(result.primary_window.used_percent, 42);
+      assert.equal(result.secondary_window.used_percent, 18);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("does not use cached Antigravity quota after all cached windows reset", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-antigravity-cache-expired-"));
     try {
