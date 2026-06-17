@@ -17,8 +17,14 @@
 --
 -- CROSS-DEVICE SEMANTIC (GitHub Discussion #101) — two source classes:
 --   * MACHINE-LEVEL sources (claude/codex/gemini/...) come from each machine's
---     LOCAL logs. Two real machines do independent work, so they must add up:
---     SUM across the user's ACTIVE devices.
+--     LOCAL logs. Pick ONE canonical row per (hour, source, model) across the
+--     user's ACTIVE devices (largest total_tokens wins) rather than summing.
+--     One physical machine drifts across multiple device_ids (unstable
+--     fingerprint, name-family splits, replay), and summing those double-counts
+--     (issue #187). Whole-row dedup on the cumulative per-(hour,model) snapshot
+--     is immune to that. The cost: two genuinely distinct machines running the
+--     SAME model in the SAME half-hour count once, not summed — rare, and far
+--     better than the systemic ~2x that fold-then-SUM produced.
 --   * ACCOUNT-LEVEL sources (cursor) come from a per-ACCOUNT cloud API, NOT
 --     machine logs. Every device that syncs them stores an IDENTICAL copy, so
 --     SUMming across devices multiplies one account's usage by its device
@@ -88,44 +94,51 @@ AS $func$
   ),
   -- Stage 1: canonicalize to the raw hour grain.
   hourly AS (
-    -- Machine-level: SUM across the user's ACTIVE devices, but FIRST collapse
-    -- rows that are byte-identical across multiple device_ids. One physical
-    -- machine accumulates several device_ids over time (identity-scheme drift:
-    -- no-suffix name -> "#suffix" name -> machine_id anchor; plus PR #184's
-    -- full-history replay landing on a fresh device_id). Naively summing those
-    -- active rows double-counts (the 2026-06 "2x token" reports, issue #187).
-    -- The inner GROUP BY folds rows identical across ALL six token columns into
-    -- one (MAX(conversations) so a conversations-only difference can't reinflate
-    -- the token sum); genuinely distinct per-machine rows differ in their token
-    -- columns, survive the fold, and STILL sum -- so legitimate multi-machine
-    -- totals are preserved (Discussion #101). Read-time dedup is durable: a
-    -- replay re-mirrors identical rows and they re-collapse, unlike a one-shot
-    -- DELETE (scripts/ops/tokentracker-hourly-mirror-row-dedup.sql) which the
-    -- duplicates kept outgrowing.
-    SELECT dd.hour_start, dd.source, dd.model,
-      SUM(dd.total_tokens)::bigint                AS total_tokens,
-      SUM(dd.input_tokens)::bigint                AS input_tokens,
-      SUM(dd.output_tokens)::bigint               AS output_tokens,
-      SUM(dd.cached_input_tokens)::bigint         AS cached_input_tokens,
-      SUM(dd.cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
-      SUM(dd.reasoning_output_tokens)::bigint     AS reasoning_output_tokens,
-      SUM(dd.conversations)::bigint               AS conversations
+    -- Machine-level: ONE canonical whole row per (hour, source, model) across
+    -- the user's ACTIVE devices, taking the row with the largest total_tokens
+    -- (newest-wins on ties) -- the SAME dedup as the account-level branch below,
+    -- only the source/device filters differ.
+    --
+    -- One physical machine accumulates several device_ids over time: identity
+    -- drift (no-suffix name -> "#suffix" -> machine_id anchor), an UNSTABLE
+    -- hardware fingerprint minting a fresh id (sandbox vs CLI username, or
+    -- ioreg/reg failure -> randomUUID), the CLI vs dashboard name families that
+    -- never adopt each other, plus PR #184's full-history replay. The previous
+    -- fold-then-SUM only collapsed rows BYTE-IDENTICAL across all six token
+    -- columns, so a machine whose duplicate devices diverged by even one
+    -- boundary hour (different sync offsets) double-counted -- the 2026-06 "2x
+    -- token" reports (issue #187). Keying the canonical pick on the cumulative
+    -- per-(hour,model) snapshot instead of device identity is immune to every
+    -- split mode and needs no historical backfill.
+    --
+    -- Trade-off vs Discussion #101's "two real machines sum": genuinely distinct
+    -- machines that ran the SAME model in the SAME half-hour bucket now count
+    -- once (the larger snapshot) instead of summing. That collision is rare
+    -- (distinct machines rarely hit an identical model+half-hour), and measured
+    -- against real heavy multi-machine users it lands far closer to truth than
+    -- the systemic ~2x the fold-then-SUM produced.
+    SELECT mac.hour_start, mac.source, mac.model,
+      mac.total_tokens, mac.input_tokens, mac.output_tokens,
+      mac.cached_input_tokens, mac.cache_creation_input_tokens,
+      mac.reasoning_output_tokens, mac.conversations
     FROM (
-      SELECT h.hour_start, h.source, h.model,
-        h.total_tokens, h.input_tokens, h.output_tokens, h.cached_input_tokens,
-        h.cache_creation_input_tokens, h.reasoning_output_tokens,
-        MAX(h.conversations) AS conversations
+      SELECT DISTINCT ON (h.hour_start, h.source, h.model)
+        h.hour_start, h.source, h.model,
+        h.total_tokens::bigint                AS total_tokens,
+        h.input_tokens::bigint                AS input_tokens,
+        h.output_tokens::bigint               AS output_tokens,
+        h.cached_input_tokens::bigint         AS cached_input_tokens,
+        h.cache_creation_input_tokens::bigint AS cache_creation_input_tokens,
+        h.reasoning_output_tokens::bigint     AS reasoning_output_tokens,
+        h.conversations::bigint               AS conversations
       FROM tokentracker_hourly h CROSS JOIN cfg
       WHERE h.user_id = p_user_id
         AND h.hour_start >= p_from
         AND h.hour_start <  p_to
         AND NOT (h.source = ANY(cfg.account_sources))
         AND h.device_id = ANY(p_device_ids)
-      GROUP BY h.hour_start, h.source, h.model,
-        h.total_tokens, h.input_tokens, h.output_tokens, h.cached_input_tokens,
-        h.cache_creation_input_tokens, h.reasoning_output_tokens
-    ) dd
-    GROUP BY dd.hour_start, dd.source, dd.model
+      ORDER BY h.hour_start, h.source, h.model, h.total_tokens DESC, h.updated_at DESC
+    ) mac
 
     UNION ALL
 

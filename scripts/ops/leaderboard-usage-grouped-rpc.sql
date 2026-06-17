@@ -15,9 +15,13 @@
 -- one row, exactly like account_usage_grouped.
 --
 -- TWO-CLASS cross-device semantic (identical to account_usage_grouped):
---   * MACHINE-LEVEL sources (claude/codex/...): real independent per-machine
---     work — SUM across the user's ACTIVE devices (revoked_at IS NULL),
---     dropping historic device churn.
+--   * MACHINE-LEVEL sources (claude/codex/...): pick ONE canonical row per
+--     (user, source, model, hour) across the user's ACTIVE devices (revoked_at
+--     IS NULL), largest total_tokens wins, rather than summing. One machine
+--     drifts across multiple device_ids (unstable fingerprint, name-family
+--     splits, replay) and summing those double-counts the ranking (issue #187).
+--     Two genuinely distinct machines on the SAME model+half-hour count once —
+--     rare, far better than the systemic ~2x summing produced.
 --   * ACCOUNT-LEVEL sources (cursor): a per-ACCOUNT cloud API, stored
 --     identically on every device that synced it — keep ONE canonical whole
 --     row per (user, source, model, hour) across ALL devices (dedup, not sum,
@@ -59,27 +63,41 @@ AS $func$
   -- so the whole-history 'total' refresh stays within the edge's 30s budget --
   -- an intermediate per-hour SUM would add a third pass and tip 'total' over.
   rows_hg AS (
-    -- Machine-level: collapse rows byte-identical across multiple device_ids
-    -- before summing. One physical machine accumulates several device_ids over
-    -- time (identity-scheme drift: no-suffix name -> "#suffix" name -> machine_id
-    -- anchor; plus PR #184's full-history replay landing on a fresh device_id).
-    -- Naively summing those active rows double-counts the ranking (the 2026-06
-    -- "2x token" reports, issue #187). DISTINCT folds rows identical across ALL
-    -- six token columns into one; genuinely distinct per-machine rows differ in
-    -- their token columns, survive, and are summed by per_usm (multi-machine
-    -- totals preserved -- Discussion #101). Read-time dedup is durable: a replay
-    -- re-mirrors identical rows and they re-collapse, unlike a one-shot DELETE
-    -- (scripts/ops/tokentracker-hourly-mirror-row-dedup.sql) which the
-    -- duplicates kept outgrowing.
-    SELECT DISTINCT h.user_id, h.source, h.model, h.hour_start,
-      h.total_tokens, h.input_tokens, h.output_tokens, h.cached_input_tokens,
-      h.cache_creation_input_tokens, h.reasoning_output_tokens
-    FROM tokentracker_hourly h
-    CROSS JOIN cfg
-    JOIN tokentracker_devices d
-      ON d.id = h.device_id AND d.revoked_at IS NULL
-    WHERE h.hour_start >= p_from AND h.hour_start < p_to
-      AND NOT (h.source = ANY(cfg.account_sources))
+    -- Machine-level: ONE canonical whole row per (user, source, model, hour)
+    -- across the user's ACTIVE devices, largest total_tokens wins -- the SAME
+    -- dedup as the account-level branch below, only the source/device filters
+    -- differ. One physical machine accumulates several device_ids over time:
+    -- identity drift (no-suffix name -> "#suffix" -> machine_id anchor), an
+    -- UNSTABLE hardware fingerprint minting a fresh id (sandbox vs CLI username,
+    -- or ioreg/reg failure -> randomUUID), the CLI vs dashboard name families
+    -- that never adopt each other, plus PR #184's full-history replay. The
+    -- previous SELECT DISTINCT only folded rows BYTE-IDENTICAL across all six
+    -- token columns, so a machine whose duplicate devices diverged by even one
+    -- boundary hour double-counted the ranking (the 2026-06 "2x token" reports,
+    -- issue #187). Keying on the cumulative per-(hour,model) snapshot is immune
+    -- to every split mode. Trade-off: two genuinely distinct machines running
+    -- the SAME model in the SAME half-hour count once, not summed -- rare, and
+    -- far better than the systemic ~2x. Mirrors account_usage_grouped.
+    SELECT mac.user_id, mac.source, mac.model, mac.hour_start,
+      mac.total_tokens, mac.input_tokens, mac.output_tokens,
+      mac.cached_input_tokens, mac.cache_creation_input_tokens, mac.reasoning_output_tokens
+    FROM (
+      SELECT DISTINCT ON (h.user_id, h.source, h.model, h.hour_start)
+        h.user_id, h.source, h.model, h.hour_start,
+        h.total_tokens::bigint                AS total_tokens,
+        h.input_tokens::bigint                AS input_tokens,
+        h.output_tokens::bigint               AS output_tokens,
+        h.cached_input_tokens::bigint         AS cached_input_tokens,
+        h.cache_creation_input_tokens::bigint AS cache_creation_input_tokens,
+        h.reasoning_output_tokens::bigint     AS reasoning_output_tokens
+      FROM tokentracker_hourly h
+      CROSS JOIN cfg
+      JOIN tokentracker_devices d
+        ON d.id = h.device_id AND d.revoked_at IS NULL
+      WHERE h.hour_start >= p_from AND h.hour_start < p_to
+        AND NOT (h.source = ANY(cfg.account_sources))
+      ORDER BY h.user_id, h.source, h.model, h.hour_start, h.total_tokens DESC, h.updated_at DESC
+    ) mac
 
     UNION ALL
 
