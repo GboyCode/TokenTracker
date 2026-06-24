@@ -48,3 +48,20 @@ test("every account-* endpoint reads device_id and guards it with includes()", (
     );
   }
 });
+
+test("account-devices endpoint exists, verifies JWT, queries devices, sums per-device", () => {
+  const src = readEdge("tokentracker-account-devices.ts");
+  assert.ok(src.includes("verifiedUserIdFromJwt"), "missing JWT verification");
+  assert.ok(
+    src.includes('.from("tokentracker_devices")'),
+    "does not query tokentracker_devices",
+  );
+  assert.ok(src.includes('"device_name"') || src.includes("device_name"), "no device_name field");
+  assert.ok(src.includes("account_usage_grouped"), "does not sum usage via the RPC");
+  assert.ok(src.includes("total_tokens"), "does not return per-device total_tokens");
+});
+
+test("account-devices is NOT in the pricing-parity mirror set (no MODEL_PRICING block)", () => {
+  const src = readEdge("tokentracker-account-devices.ts");
+  assert.ok(!src.includes("const MODEL_PRICING"), "account-devices must not embed a pricing block");
+});
