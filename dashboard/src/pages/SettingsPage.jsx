@@ -4,6 +4,7 @@ import { AccountSection } from "../components/settings/AccountSection.jsx";
 import { AppearanceSection } from "../components/settings/AppearanceSection.jsx";
 import { SectionCard, SegmentedControl } from "../components/settings/Controls.jsx";
 import { MenuBarSection, NativeAppFooter } from "../components/settings/MenuBarSection.jsx";
+import { LabsSection } from "../components/settings/LabsSection.jsx";
 import { LIMIT_DISPLAY_MODES, useLimitsDisplayPrefs } from "../hooks/use-limits-display-prefs.js";
 import { copy } from "../lib/copy";
 
@@ -46,6 +47,7 @@ export function SettingsPage() {
             >
               <LimitsSettingsPanel prefs={limitsPrefs} />
             </SectionCard>
+            <LabsSection />
           </div>
 
           <NativeAppFooter />

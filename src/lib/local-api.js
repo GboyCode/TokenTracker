@@ -1595,6 +1595,31 @@ function createLocalApiHandler({ queuePath }) {
       return true;
     }
 
+    // --- outcomes (opt-in quality-per-dollar / Effective Tokens; sidecar) ---
+    // Reads the optional ~/.tokentracker/tracker/outcomes.jsonl sidecar and
+    // joins it to the existing token/$ rows at READ time. Returns
+    // available:false with empty arrays when the user hasn't opted in, so the
+    // dashboard renders exactly as before. This path NEVER reads or writes
+    // queue.jsonl's schema or the sync path (see GitHub #229).
+    if (p === "/functions/tokentracker-outcomes") {
+      const from = url.searchParams.get("from") || "";
+      const to = url.searchParams.get("to") || "";
+      const {
+        readOutcomesData,
+        resolveOutcomesPath,
+        computeQualityPerDollar,
+      } = require("./outcomes-engine");
+      const outcomes = readOutcomesData(resolveOutcomesPath());
+      if (!outcomes.length) {
+        json(res, { available: false, from, to, by_model: [], by_tool: [], totals: null });
+        return true;
+      }
+      const { rows, scope, excludedSources } = scopedQueueRows(qp, url);
+      const result = computeQualityPerDollar(rows, outcomes, { from, to });
+      json(res, { from, to, scope, excluded_sources: excludedSources, ...result });
+      return true;
+    }
+
     // --- usage-heatmap ---
     if (p === "/functions/tokentracker-usage-heatmap") {
       const weeks = parseInt(url.searchParams.get("weeks") || "52", 10);

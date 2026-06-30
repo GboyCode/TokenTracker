@@ -363,6 +363,23 @@ settings.page.subtitle,ui,SettingsPage,SettingsPage,subtitle,"Manage your accoun
 settings.section.appearance,ui,SettingsPage,SettingsPage,sec_appearance,"Appearance",,active
 settings.section.account,ui,SettingsPage,SettingsPage,sec_account,"Account",,active
 settings.section.limits,ui,SettingsPage,SettingsPage,sec_limits,"Limits Display",,active
+settings.section.labs,ui,SettingsPage,LabsSection,sec_labs,"Labs",,active
+settings.labs.qpd.label,ui,SettingsPage,LabsSection,qpd_label,"Quality per dollar",,active
+settings.labs.qpd.hint,ui,SettingsPage,LabsSection,qpd_hint,"Experimental. Joins an optional outcomes.jsonl sidecar to your token/$ data to show accepted outcomes per dollar and Effective Tokens, per model and tool. Off by default; the card appears only once outcome data exists. Token costs are unaffected.",,active
+settings.labs.qpd.aria,ui,SettingsPage,LabsSection,qpd_aria,"Toggle the quality-per-dollar card",,active
+qpd.card.title,ui,DashboardView,QualityPerDollarCard,title,"Quality per dollar",,active
+qpd.card.badge,ui,DashboardView,QualityPerDollarCard,badge,"Labs",,active
+qpd.card.subtitle,ui,DashboardView,QualityPerDollarCard,subtitle,"Accepted outcomes per dollar, joined from your outcomes.jsonl sidecar.",,active
+qpd.card.updating,ui,DashboardView,QualityPerDollarCard,updating,"Updating…",,active
+qpd.card.col_model,ui,DashboardView,QualityPerDollarCard,col_model,"Model",,active
+qpd.card.col_cost,ui,DashboardView,QualityPerDollarCard,col_cost,"Cost",,active
+qpd.card.col_accepted,ui,DashboardView,QualityPerDollarCard,col_accepted,"Acc/Total",,active
+qpd.card.col_rate,ui,DashboardView,QualityPerDollarCard,col_rate,"Rate",,active
+qpd.card.col_qpd,ui,DashboardView,QualityPerDollarCard,col_qpd,"Qual/$",,active
+qpd.card.qpd_tooltip,ui,DashboardView,QualityPerDollarCard,qpd_tooltip,"Accepted outcomes per dollar",,active
+qpd.card.totals,ui,DashboardView,QualityPerDollarCard,totals,"{{accepted}}/{{outcomes}} accepted · {{cost}} spent",,active
+qpd.card.et,ui,DashboardView,QualityPerDollarCard,et,"ET {{tokens}} ({{rate}})",,active
+qpd.card.et_tooltip,ui,DashboardView,QualityPerDollarCard,et_tooltip,"Effective Tokens — the share of tokens that produced accepted work",,active
 settings.appearance.theme.label,ui,SettingsPage,SettingsPage,theme_label,"Theme",,active
 settings.appearance.theme.hint,ui,SettingsPage,SettingsPage,theme_hint,"Choose how Token Tracker looks across the dashboard.",,active
 settings.appearance.theme.light,ui,SettingsPage,SettingsPage,theme_light,"Light",,active

@@ -9,6 +9,7 @@ import { TrendMonitor } from "../components/TrendMonitor.jsx";
 import { FadeIn } from "../../foundation/FadeIn.jsx";
 import { MacAppBanner } from "../components/MacAppBanner.jsx";
 import { WidgetOnboardingCard } from "../components/WidgetOnboardingCard.jsx";
+import { QualityPerDollarCard } from "../components/QualityPerDollarCard.jsx";
 import { LoginCard } from "../../../components/LoginCard.jsx";
 import { DashboardSkeleton } from "../../../components/DashboardSkeleton.jsx";
 import { cn } from "../../../lib/cn";
@@ -315,6 +316,13 @@ export function DashboardView(props) {
                       zoomConfig={trendZoomConfig}
                     />
                   </FadeIn>
+                ) : null}
+                {!screenshotMode ? (
+                  <QualityPerDollarCard
+                    from={usageFrom}
+                    to={usageTo}
+                    deviceId={selectedDevice}
+                  />
                 ) : null}
                 {screenshotMode ? (
                   <div

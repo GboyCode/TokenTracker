@@ -28,6 +28,7 @@ const PATHS = {
   userStatus: "tokentracker-user-status",
   localSync: "tokentracker-local-sync",
   usageLimits: "tokentracker-usage-limits",
+  outcomes: "tokentracker-outcomes",
 };
 
 /**
@@ -427,6 +428,24 @@ export async function getUsageModelBreakdown({
   const tzParams = buildTimeZoneParams({ timeZone, tzOffsetMinutes });
   const filterParams = buildFilterParams({ source, device });
   return fetchLocalJson(PATHS.usageModelBreakdown, { from, to, ...filterParams, ...tzParams }, { accessToken });
+}
+
+// Opt-in quality-per-dollar / Effective-Tokens lens. Reads the optional
+// outcomes.jsonl sidecar via the local server and joins it to the token/$
+// rows at read time. Returns { available:false, … } when the user hasn't
+// opted in, so callers render nothing new. See GitHub issue 229.
+export async function getOutcomes({
+  from,
+  to,
+  source,
+  device,
+  accessToken,
+}: AnyRecord = {}) {
+  if (isMockEnabled()) {
+    return { available: false, by_model: [], by_tool: [], totals: null };
+  }
+  const filterParams = buildFilterParams({ source, device });
+  return fetchLocalJson(PATHS.outcomes, { from, to, ...filterParams }, { accessToken });
 }
 
 export async function getUsageCategoryBreakdown({
