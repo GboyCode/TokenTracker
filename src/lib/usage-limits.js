@@ -42,6 +42,12 @@ const ANTIGRAVITY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS = 12 * 60 * 60 * 1000;
 const CLAUDE_LIMITS_CACHE_FILE = "claude-usage-limits-cache.json";
 const CLAUDE_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CLAUDE_LIMITS_CACHE_FRESH_TTL_MS = 10 * 60 * 1000;
+// Codex has no rate-limit cooldown like Claude, but its two sequential chatgpt.com requests
+// (/wham/usage + /wham/rate-limit-reset-credits) make it the provider most exposed to slow
+// networks. Persist the last successful read so a timeout serves stale bars instead of a red
+// error, mirroring the Claude stale-fallback path.
+const CODEX_LIMITS_CACHE_FILE = "codex-usage-limits-cache.json";
+const CODEX_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A 429 from the usage endpoint carries a long `retry-after` (often 20+ minutes). Persist
 // the cooldown so every surface — this process, the menu bar app's embedded server, a later
 // restart — stops calling until it expires. Hammering during the cooldown just renews the
@@ -57,6 +63,12 @@ function clampPercent(value) {
   if (n <= 0) return 0;
   if (n >= 100) return 100;
   return n;
+}
+
+function toFiniteNumberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function buildWindow({ usedPercent, resetAt }) {
@@ -219,6 +231,60 @@ function normalizeCodexRateWindows(rateLimit) {
     };
   }
   return { primary_window: session, secondary_window: weekly };
+}
+
+function normalizeCodexCreditWindow(individualLimit) {
+  if (!individualLimit || typeof individualLimit !== "object" || Array.isArray(individualLimit)) {
+    return null;
+  }
+
+  const limitCredits = toFiniteNumberOrNull(individualLimit.limit);
+  const usedCredits = toFiniteNumberOrNull(individualLimit.used);
+  const remainingCredits = toFiniteNumberOrNull(individualLimit.remaining);
+
+  let usedPercent = clampPercent(individualLimit.used_percent);
+  if (limitCredits && limitCredits > 0 && usedCredits !== null) {
+    const derivedUsedPercent = clampPercent((usedCredits / limitCredits) * 100);
+    if (derivedUsedPercent !== null && (usedPercent === null || (usedPercent === 0 && usedCredits > 0))) {
+      usedPercent = derivedUsedPercent;
+    }
+  }
+
+  let remainingPercent = clampPercent(individualLimit.remaining_percent);
+  if (limitCredits && limitCredits > 0 && remainingCredits !== null) {
+    const derivedRemainingPercent = clampPercent((remainingCredits / limitCredits) * 100);
+    if (
+      derivedRemainingPercent !== null
+      && (remainingPercent === null || (remainingPercent === 100 && (usedCredits || 0) > 0))
+    ) {
+      remainingPercent = derivedRemainingPercent;
+    }
+  }
+
+  const resetAt = toFiniteNumberOrNull(individualLimit.reset_at);
+  const source = typeof individualLimit.source === "string" && individualLimit.source.trim()
+    ? individualLimit.source.trim()
+    : null;
+
+  if (
+    usedPercent === null
+    && limitCredits === null
+    && usedCredits === null
+    && remainingCredits === null
+    && resetAt === null
+  ) {
+    return null;
+  }
+
+  return {
+    source,
+    used_percent: usedPercent ?? 0,
+    remaining_percent: remainingPercent,
+    reset_at: resetAt,
+    limit_credits: limitCredits,
+    used_credits: usedCredits,
+    remaining_credits: remainingCredits,
+  };
 }
 
 function isCodexSparkLimit(entry) {
@@ -425,6 +491,7 @@ async function fetchCodexUsageLimits(
     return {
       primary_window: null,
       secondary_window: null,
+      credit_window: null,
       spark_primary_window: null,
       spark_secondary_window: null,
       reset_credits: null,
@@ -449,6 +516,7 @@ async function fetchCodexUsageLimits(
   }
   return {
     ...normalizeCodexRateWindows(body.rate_limit || {}),
+    credit_window: normalizeCodexCreditWindow(body.spend_control?.individual_limit),
     ...normalizeCodexSparkRateWindows(body.additional_rate_limits),
     reset_credits: resetCredits,
   };
@@ -1853,6 +1921,88 @@ function writeClaudeLimitsCache(limits, { home, nowMs = Date.now() } = {}) {
   } catch (_error) {}
 }
 
+function resolveCodexLimitsCachePath({ home } = {}) {
+  return path.join(home || os.homedir(), ".tokentracker", "tracker", CODEX_LIMITS_CACHE_FILE);
+}
+
+// Codex windows carry `reset_at` as unix seconds (not an ISO string). A window whose reset has
+// already passed is stale data, not a usable fallback, so drop it. Windows without a reset stamp
+// are kept — the overall cached_at max-age gate already bounds them.
+function isCodexCacheWindowUsable(window, { nowMs } = {}) {
+  if (!window || typeof window !== "object") return false;
+  const resetAt = Number(window.reset_at);
+  if (!Number.isFinite(resetAt) || resetAt <= 0) return true;
+  return resetAt * 1000 > nowMs;
+}
+
+function hasCodexWindow(limits) {
+  return Boolean(
+    limits?.primary_window
+    || limits?.secondary_window
+    || limits?.credit_window
+    || limits?.spark_primary_window
+    || limits?.spark_secondary_window,
+  );
+}
+
+function normalizeCodexCachedLimits(
+  raw,
+  { nowMs = Date.now(), maxAgeMs = CODEX_LIMITS_CACHE_MAX_AGE_MS } = {},
+) {
+  const cachedAtMs = parseTimeMs(raw?.cached_at);
+  if (!Number.isFinite(cachedAtMs)) return null;
+  if (cachedAtMs > nowMs + 60_000) return null;
+  if (nowMs - cachedAtMs > maxAgeMs) return null;
+
+  const cached = {
+    configured: true,
+    error: null,
+    plan_type: typeof raw?.plan_type === "string" ? raw.plan_type : null,
+    primary_window: isCodexCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
+    secondary_window: isCodexCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
+    credit_window: isCodexCacheWindowUsable(raw?.credit_window, { nowMs }) ? raw.credit_window : null,
+    spark_primary_window: isCodexCacheWindowUsable(raw?.spark_primary_window, { nowMs }) ? raw.spark_primary_window : null,
+    spark_secondary_window: isCodexCacheWindowUsable(raw?.spark_secondary_window, { nowMs }) ? raw.spark_secondary_window : null,
+    reset_credits: raw?.reset_credits ?? null,
+    stale: true,
+    cached_at: raw.cached_at,
+  };
+  return hasCodexWindow(cached) ? cached : null;
+}
+
+function readCodexLimitsCache({ home, nowMs = Date.now(), maxAgeMs = CODEX_LIMITS_CACHE_MAX_AGE_MS } = {}) {
+  const cachePath = resolveCodexLimitsCachePath({ home });
+  try {
+    const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+    return normalizeCodexCachedLimits(parsed?.codex, { nowMs, maxAgeMs });
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeCodexLimitsCache(limits, { home, nowMs = Date.now() } = {}) {
+  if (!limits?.configured || limits.error || !hasCodexWindow(limits)) return;
+  const cachePath = resolveCodexLimitsCachePath({ home });
+  const payload = {
+    codex: {
+      plan_type: limits.plan_type || null,
+      primary_window: limits.primary_window || null,
+      secondary_window: limits.secondary_window || null,
+      credit_window: limits.credit_window || null,
+      spark_primary_window: limits.spark_primary_window || null,
+      spark_secondary_window: limits.spark_secondary_window || null,
+      reset_credits: limits.reset_credits || null,
+      cached_at: new Date(nowMs).toISOString(),
+    },
+  };
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, cachePath);
+  } catch (_error) {}
+}
+
 function resolveClaudeRateLimitPath({ home } = {}) {
   return path.join(home || os.homedir(), ".tokentracker", "tracker", CLAUDE_RATE_LIMIT_FILE);
 }
@@ -2534,7 +2684,15 @@ async function fetchUsageLimitsUncached({
       auth_action_required: "reauth",
     };
   } else if (!codexResult || codexResult.status === "rejected") {
-    codex = { configured: true, error: codexResult?.reason?.message || "Unknown error" };
+    // Live fetch failed or timed out (Codex hits chatgpt.com fresh every poll with no
+    // rate-limit cooldown, so a slow network shows up here often). Serve the last successful
+    // read so the bars stay visible instead of a red error, mirroring the Claude stale path.
+    const cached = readCodexLimitsCache({ home, nowMs });
+    if (cached) {
+      codex = cached;
+    } else {
+      codex = { configured: true, error: codexResult?.reason?.message || "Unknown error" };
+    }
   } else {
     codex = {
       configured: true,
@@ -2542,10 +2700,12 @@ async function fetchUsageLimitsUncached({
       plan_type: codexPlanType || null,
       primary_window: codexResult.value.primary_window,
       secondary_window: codexResult.value.secondary_window,
+      credit_window: codexResult.value.credit_window,
       spark_primary_window: codexResult.value.spark_primary_window,
       spark_secondary_window: codexResult.value.spark_secondary_window,
       reset_credits: codexResult.value.reset_credits,
     };
+    writeCodexLimitsCache(codex, { home, nowMs });
   }
 
   const data = {

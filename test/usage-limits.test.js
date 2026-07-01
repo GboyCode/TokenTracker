@@ -439,6 +439,156 @@ describe("getUsageLimits", () => {
     }
   });
 
+  it("parses Codex business spend controls into a credit window", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-codex-business-credits-"));
+    try {
+      writeCodexAuth(tmp, "business", { account_id: "acc-business" });
+
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 2000,
+        securityRunner: inactiveRunner,
+        commandRunner: inactiveRunner,
+        fetchImpl(url) {
+          if (url === CODEX_WHAM_USAGE_URL) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                rate_limit: null,
+                spend_control: {
+                  individual_limit: {
+                    source: "group_based_spend_controls",
+                    limit: "37500",
+                    used: "51.03434884548187",
+                    remaining: "37448.96565115452",
+                    used_percent: 0,
+                    remaining_percent: 100,
+                    reset_after_seconds: 2670190,
+                    reset_at: 1785542400,
+                  },
+                },
+                additional_rate_limits: [
+                  {
+                    limit_name: "GPT-5.3-Codex-Spark-Preview",
+                    metered_feature: "codex_bengalfox",
+                    rate_limit: {
+                      primary_window: { used_percent: 0, limit_window_seconds: 18000, reset_at: 1782890210 },
+                      secondary_window: { used_percent: 0, limit_window_seconds: 604800, reset_at: 1783477010 },
+                    },
+                  },
+                ],
+                rate_limit_reset_credits: { available_count: 0 },
+              }),
+            });
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+
+      assert.equal(result.codex.configured, true);
+      assert.equal(result.codex.error, null);
+      assert.equal(result.codex.plan_type, "business");
+      assert.equal(result.codex.primary_window, null);
+      assert.equal(result.codex.secondary_window, null);
+      assert.equal(result.codex.credit_window.source, "group_based_spend_controls");
+      assert.equal(result.codex.credit_window.reset_at, 1785542400);
+      assert.equal(result.codex.credit_window.limit_credits, 37500);
+      assert.equal(result.codex.credit_window.used_credits, 51.03434884548187);
+      assert.equal(result.codex.credit_window.remaining_credits, 37448.96565115452);
+      assert.ok(Math.abs(result.codex.credit_window.used_percent - 0.13609159692128498) < 1e-12);
+      assert.ok(Math.abs(result.codex.credit_window.remaining_percent - 99.86390840307871) < 1e-12);
+      assert.deepEqual(result.codex.spark_primary_window, {
+        used_percent: 0,
+        limit_window_seconds: 18000,
+        reset_at: 1782890210,
+      });
+      assert.deepEqual(result.codex.spark_secondary_window, {
+        used_percent: 0,
+        limit_window_seconds: 604800,
+        reset_at: 1783477010,
+      });
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("serves the last successful Codex read from disk cache when a later fetch fails", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-codex-stale-"));
+    try {
+      writeCodexAuth(tmp, "business", { account_id: "acc-business" });
+
+      const ok = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 2000,
+        securityRunner: inactiveRunner,
+        commandRunner: inactiveRunner,
+        fetchImpl(url) {
+          if (url === CODEX_WHAM_USAGE_URL) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                rate_limit: {
+                  primary_window: { used_percent: 12, limit_window_seconds: 18000, reset_at: 1_900_000_000 },
+                  secondary_window: { used_percent: 34, limit_window_seconds: 604800, reset_at: 1_900_600_000 },
+                },
+                spend_control: {
+                  individual_limit: {
+                    source: "group_based_spend_controls",
+                    limit: "37500",
+                    used: "220",
+                    remaining: "37280",
+                    reset_at: 1_900_000_000,
+                  },
+                },
+                rate_limit_reset_credits: { available_count: 0 },
+              }),
+            });
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+      assert.equal(ok.codex.error, null);
+      assert.equal(ok.codex.primary_window.used_percent, 12);
+      assert.equal(ok.codex.credit_window.limit_credits, 37500);
+      assert.notEqual(ok.codex.stale, true);
+
+      // Drop the in-memory cache so the next call actually re-fetches and hits the failure branch.
+      resetUsageLimitsCache();
+
+      const failed = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 2000,
+        securityRunner: inactiveRunner,
+        commandRunner: inactiveRunner,
+        fetchImpl(url) {
+          if (url === CODEX_WHAM_USAGE_URL) {
+            return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+      // Bars stay visible from disk cache instead of flipping to a red "timed out" error.
+      assert.equal(failed.codex.configured, true);
+      assert.equal(failed.codex.error, null);
+      assert.equal(failed.codex.stale, true);
+      assert.equal(failed.codex.primary_window.used_percent, 12);
+      assert.equal(failed.codex.secondary_window.used_percent, 34);
+      assert.equal(failed.codex.credit_window.limit_credits, 37500);
+      assert.equal(failed.codex.plan_label, "Business");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("maps Codex Spark windows by duration when their slots are reversed", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-codex-spark-reversed-"));

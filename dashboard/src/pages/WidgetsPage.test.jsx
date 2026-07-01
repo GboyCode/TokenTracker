@@ -95,13 +95,19 @@ describe("WidgetsPage menu bar configurator", () => {
     });
   });
 
-  it("localizes Codex Spark native menu item labels through copy", async () => {
+  it("localizes Codex credit and Spark native menu item labels through copy", async () => {
     setCopyLocale(ZH_CN_LOCALE);
     const bridge = installNativeBridge({
       showStats: true,
-      menuBarItems: ["codexSpark5h", "codexSpark7d"],
+      menuBarItems: ["codexCredits", "codexSpark7d"],
       menuBarMaxItems: 2,
       menuBarAvailableItems: [
+        {
+          id: "codexCredits",
+          label: "Codex Credit Limit",
+          shortLabel: "Cx Cred",
+          category: "limits",
+        },
         {
           id: "codexSpark5h",
           label: "Codex Spark 5h Limit",
@@ -123,7 +129,7 @@ describe("WidgetsPage menu bar configurator", () => {
     const primary = await screen.findByRole("combobox", { name: copy("menubar.slot.primary") });
     const secondary = screen.getByRole("combobox", { name: copy("menubar.slot.secondary") });
 
-    expect(primary).toHaveTextContent(copy("menubar.metric.codex_spark_5h"));
+    expect(primary).toHaveTextContent(copy("menubar.metric.codex_credits"));
     expect(secondary).toHaveTextContent(copy("menubar.metric.codex_spark_7d"));
   });
 });

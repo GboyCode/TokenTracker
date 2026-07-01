@@ -57,6 +57,27 @@ final class MenuBarDisplayPreferencesTests: XCTestCase {
         XCTAssertTrue(ids.contains(MenuBarDisplayMetric.claude5h.rawValue))
     }
 
+    func testCodexCreditMetricAppearsWhenCreditWindowExists() throws {
+        let limits = try decodeResponse(overrides: [
+            "codex": [
+                "configured": true,
+                "credit_window": [
+                    "used_percent": 0.14,
+                    "limit_credits": 37_500,
+                    "used_credits": 51.03,
+                    "remaining_credits": 37_448.97,
+                    "reset_at": 1_785_542_400,
+                ],
+            ],
+        ])
+
+        let ids = MenuBarDisplayPreferences.availableItemIDs(for: limits)
+
+        XCTAssertTrue(ids.contains(MenuBarDisplayMetric.codexCredits.rawValue))
+        XCTAssertFalse(ids.contains(MenuBarDisplayMetric.codex5h.rawValue))
+        XCTAssertFalse(ids.contains(MenuBarDisplayMetric.codex7d.rawValue))
+    }
+
     /// Every limit metric's providerKey must be a known LimitsSettingsStore
     /// provider id, or visibility filtering silently never matches it.
     func testProviderKeysMatchLimitsSettingsStoreProviders() {
@@ -68,5 +89,22 @@ final class MenuBarDisplayPreferencesTests: XCTestCase {
                 "providerKey \(provider) for \(metric.rawValue) missing from LimitsSettingsStore.allProviders"
             )
         }
+    }
+
+    private func decodeResponse(overrides: [String: Any] = [:]) throws -> UsageLimitsResponse {
+        var payload: [String: Any] = [
+            "fetched_at": "2026-07-01T00:00:00Z",
+            "claude": ["configured": false],
+            "codex": ["configured": false],
+            "cursor": ["configured": false],
+            "gemini": ["configured": false],
+            "kiro": ["configured": false],
+            "antigravity": ["configured": false],
+        ]
+        for (key, value) in overrides {
+            payload[key] = value
+        }
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        return try JSONDecoder().decode(UsageLimitsResponse.self, from: data)
     }
 }

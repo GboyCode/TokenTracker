@@ -124,7 +124,34 @@ final class UsageLimitsRetentionTests: XCTestCase {
 
         XCTAssertEqual(response.codex.planLabel, "Plus")
         XCTAssertEqual(response.codex.primaryWindow?.usedPercent, 42)
+        XCTAssertNil(response.codex.creditWindow)
         XCTAssertNil(response.codex.resetCredits)
+    }
+
+    func testCodexCreditWindowDecodesSpendControlFields() throws {
+        let response = try decodeResponse(overrides: [
+            "codex": [
+                "configured": true,
+                "credit_window": [
+                    "source": "group_based_spend_controls",
+                    "used_percent": 0.13609159692128498,
+                    "remaining_percent": 99.86390840307871,
+                    "reset_at": 1_785_542_400,
+                    "limit_credits": 37_500,
+                    "used_credits": 51.03434884548187,
+                    "remaining_credits": 37_448.96565115452,
+                ],
+            ],
+        ])
+
+        let credit = try XCTUnwrap(response.codex.creditWindow)
+        XCTAssertEqual(credit.source, "group_based_spend_controls")
+        XCTAssertEqual(credit.resetAt, 1_785_542_400)
+        XCTAssertEqual(credit.limitCredits, 37_500)
+        XCTAssertEqual(try XCTUnwrap(credit.usedCredits), 51.03434884548187, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(credit.remainingCredits), 37_448.96565115452, accuracy: 1e-12)
+        XCTAssertEqual(credit.usedPercent, 0.13609159692128498, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(credit.remainingPercent), 99.86390840307871, accuracy: 1e-12)
     }
 
     func testCodexResetCreditsFullPayloadDecodesWhitelistedFields() throws {

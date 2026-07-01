@@ -70,6 +70,7 @@ struct CodexLimits: Codable, Equatable {
     let planLabel: String?
     let primaryWindow: CodexWindow?
     let secondaryWindow: CodexWindow?
+    let creditWindow: CodexCreditWindow?
     let sparkPrimaryWindow: CodexWindow?
     let sparkSecondaryWindow: CodexWindow?
     let resetCredits: ResetCredits?
@@ -79,6 +80,7 @@ struct CodexLimits: Codable, Equatable {
         case planLabel = "plan_label"
         case primaryWindow = "primary_window"
         case secondaryWindow = "secondary_window"
+        case creditWindow = "credit_window"
         case sparkPrimaryWindow = "spark_primary_window"
         case sparkSecondaryWindow = "spark_secondary_window"
         case resetCredits = "reset_credits"
@@ -134,6 +136,26 @@ struct CodexWindow: Codable, Equatable {
         case usedPercent = "used_percent"
         case resetAt = "reset_at"
         case limitWindowSeconds = "limit_window_seconds"
+    }
+}
+
+struct CodexCreditWindow: Codable, Equatable {
+    let source: String?
+    let usedPercent: Double
+    let remainingPercent: Double?
+    let resetAt: Int?
+    let limitCredits: Double?
+    let usedCredits: Double?
+    let remainingCredits: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case usedPercent = "used_percent"
+        case remainingPercent = "remaining_percent"
+        case resetAt = "reset_at"
+        case limitCredits = "limit_credits"
+        case usedCredits = "used_credits"
+        case remainingCredits = "remaining_credits"
     }
 }
 

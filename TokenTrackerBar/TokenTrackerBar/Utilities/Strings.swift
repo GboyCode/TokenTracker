@@ -61,6 +61,7 @@ enum Strings {
     static var allProvidersHidden: String { t("All providers hidden", "所有提供方均已隐藏", "所有提供方均已隱藏", "すべてのプロバイダーが非表示です", "모든 제공자가 숨겨졌습니다") }
     static var cursorPlanLabel: String { t("Plan", "套餐", "套餐", "プラン", "플랜") }
     static var cursorAutoLabel: String { t("Auto", "自动", "自動", "自動", "자동") }
+    static var codexCreditsLabel: String { t("Credits", "额度", "額度", "クレジット", "크레딧") }
     static var kimiWeeklyLabel: String { t("Weekly", "周", "周", "週間", "주간") }
     static var kimiFiveHourLabel: String { t("5h", "5h", "5h", "5h", "5h") }
     static var kimiTotalLabel: String { t("Total", "总量", "總量", "合計", "총량") }
@@ -71,6 +72,15 @@ enum Strings {
     static var limitResetNow: String { t("now", "现在", "現在", "今", "지금") }
     static func kimiParallelLabel(_ count: Int) -> String {
         t("Parallel: \(count)", "并发：\(count)", "併發：\(count)", "並列：\(count)", "병렬: \(count)")
+    }
+    static func codexCreditsDetail(used: String, limit: String, remaining: String) -> String {
+        t(
+            "\(used) / \(limit) credits used · \(remaining) left",
+            "已用 \(used) / \(limit) 点额度 · 剩余 \(remaining)",
+            "已用 \(used) / \(limit) 點額度 · 剩餘 \(remaining)",
+            "\(used) / \(limit) クレジット使用済み · 残り \(remaining)",
+            "\(used) / \(limit) 크레딧 사용 · 남은 \(remaining)"
+        )
     }
     static var codexResetBankSectionTitle: String {
         t("Resets", "重置权益", "重置權益", "リセット", "리셋")

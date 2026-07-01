@@ -51,6 +51,31 @@ function readWindowReset(window, field = "reset_at") {
   return window.reset_at;
 }
 
+function formatPercentValue(value) {
+  const pct = Math.max(0, Math.min(100, Number(value) || 0));
+  const rounded = Math.round(pct);
+  if (pct > 0 && rounded === 0) return copy("limits.bar.sub_one_percent");
+  return String(rounded);
+}
+
+function formatCreditAmount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: n >= 100 ? 0 : 2,
+  }).format(n);
+}
+
+function buildCodexCreditDetail(window) {
+  if (!window || typeof window !== "object") return null;
+  const used = formatCreditAmount(window.used_credits);
+  const limit = formatCreditAmount(window.limit_credits);
+  const remaining = formatCreditAmount(window.remaining_credits);
+  if (!used || !limit || !remaining) return null;
+  return copy("limits.codex_credits.detail", { used, limit, remaining });
+}
+
 /** Pace + projection for one window spec, in the active display mode. */
 function paceForSpec(spec, mode) {
   return computePace({
@@ -122,18 +147,19 @@ function explainLineFor(spec, pace, mode) {
   const projection = (usedPct) => (remaining ? 100 - usedPct : usedPct);
   // No trusted window length (monthly / billing cycle): just the usage.
   if (pace.expectedPercent == null) {
-    const used = Math.round(Math.max(0, Math.min(100, Number(readWindowPct(spec.window, spec.pctField)) || 0)));
+    const used = Math.max(0, Math.min(100, Number(readWindowPct(spec.window, spec.pctField)) || 0));
+    const usedLabel = formatPercentValue(projection(used));
     return remaining
-      ? copy("limits.explain.remaining", { label, used: projection(used) })
-      : copy("limits.explain.used", { label, used });
+      ? copy("limits.explain.remaining", { label, used: usedLabel })
+      : copy("limits.explain.used", { label, used: usedLabel });
   }
   if (pace.paceOver) {
     if (pace.runsOutEta) return copy("limits.explain.ahead_eta", { label, eta: pace.runsOutEta });
-    const pct = projection(pace.projectedEnd ?? 100);
+    const pct = formatPercentValue(projection(pace.projectedEnd ?? 100));
     return copy(remaining ? "limits.explain.ahead_pct_remaining" : "limits.explain.ahead_pct", { label, pct });
   }
-  const used = Math.round(Math.max(0, Math.min(100, Number(readWindowPct(spec.window, spec.pctField)) || 0)));
-  const pct = projection(pace.projectedEnd ?? used);
+  const used = Math.max(0, Math.min(100, Number(readWindowPct(spec.window, spec.pctField)) || 0));
+  const pct = formatPercentValue(projection(pace.projectedEnd ?? used));
   return copy(remaining ? "limits.explain.on_track_remaining" : "limits.explain.on_track", { label, pct });
 }
 
@@ -285,9 +311,16 @@ function ResetBankSection({ model }) {
 }
 
 function renderProviderExtra(kind, data) {
-  if (kind === "codex_reset_bank") {
-    const model = buildResetBankRows(data.reset_credits);
-    return model ? <ResetBankSection model={model} /> : null;
+  if (kind === "codex_meta") {
+    const creditDetail = buildCodexCreditDetail(data.credit_window);
+    const resetModel = buildResetBankRows(data.reset_credits);
+    if (!creditDetail && !resetModel) return null;
+    return (
+      <>
+        {creditDetail ? <StatusLine>{creditDetail}</StatusLine> : null}
+        {resetModel ? <ResetBankSection model={resetModel} /> : null}
+      </>
+    );
   }
   if (kind === "kimi_parallel" && data.parallel_limit) {
     return <StatusLine>{copy("limits.label.kimi_parallel", { count: data.parallel_limit })}</StatusLine>;

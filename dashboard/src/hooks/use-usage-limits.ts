@@ -8,6 +8,16 @@ type CodexLimitWindow = {
   readonly limit_window_seconds?: number;
 };
 
+type CodexCreditWindow = {
+  readonly source?: string | null;
+  readonly used_percent: number;
+  readonly remaining_percent?: number | null;
+  readonly reset_at?: number | null;
+  readonly limit_credits?: number | null;
+  readonly used_credits?: number | null;
+  readonly remaining_credits?: number | null;
+};
+
 type CodexResetCredit = {
   readonly status: string;
   readonly reset_type?: string;
@@ -27,6 +37,7 @@ type CodexUsageLimits = {
   readonly plan_label?: string | null;
   readonly primary_window?: CodexLimitWindow | null;
   readonly secondary_window?: CodexLimitWindow | null;
+  readonly credit_window?: CodexCreditWindow | null;
   readonly spark_primary_window?: CodexLimitWindow | null;
   readonly spark_secondary_window?: CodexLimitWindow | null;
   readonly reset_credits?: CodexResetCredits | null;

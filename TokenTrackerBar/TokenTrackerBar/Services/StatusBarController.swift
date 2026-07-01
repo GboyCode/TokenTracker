@@ -289,6 +289,8 @@ final class StatusBarController: NSObject {
                 return codexLimitValue(id: id, metric: metric, window: viewModel.usageLimits?.codex.primaryWindow)
             case .codex7d:
                 return codexLimitValue(id: id, metric: metric, window: viewModel.usageLimits?.codex.secondaryWindow)
+            case .codexCredits:
+                return codexCreditLimitValue(id: id, metric: metric, window: viewModel.usageLimits?.codex.creditWindow)
             case .codexSpark5h:
                 return codexLimitValue(id: id, metric: metric, window: viewModel.usageLimits?.codex.sparkPrimaryWindow)
             case .codexSpark7d:
@@ -350,6 +352,17 @@ final class StatusBarController: NSObject {
         )
     }
 
+    private func codexCreditLimitValue(id: String, metric: MenuBarDisplayMetric, window: CodexCreditWindow?) -> MenuBarDisplayValue? {
+        let value = window.map { formatLimitWithReset($0.usedPercent, resetEpoch: $0.resetAt) }
+        return genericLimitValue(
+            id: id,
+            metric: metric,
+            configured: viewModel.usageLimits?.codex.configured,
+            error: viewModel.usageLimits?.codex.error,
+            value: value
+        )
+    }
+
     private func genericLimitValue(id: String, metric: MenuBarDisplayMetric, configured: Bool?, error: String?, window: GenericLimitWindow?) -> MenuBarDisplayValue? {
         let value = window.map { formatLimitWithReset($0.usedPercent, resetIso: $0.resetAt) }
         return genericLimitValue(id: id, metric: metric, configured: configured, error: error, value: value)
@@ -387,6 +400,12 @@ final class StatusBarController: NSObject {
     private func formatLimitWithReset(_ utilization: Double, resetIso: String?) -> String {
         let pct = formatLimitPercent(utilization)
         guard let reset = formatResetTime(iso: resetIso) else { return pct }
+        return "\(pct) · \(reset)"
+    }
+
+    private func formatLimitWithReset(_ utilization: Double, resetEpoch: Int?) -> String {
+        let pct = formatLimitPercent(utilization)
+        guard let reset = formatResetTime(epoch: resetEpoch) else { return pct }
         return "\(pct) · \(reset)"
     }
 

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-29T16:13:51.811Z",
+  "generatedAt": "2026-07-01T03:11:40.708Z",
   "root": "dashboard/src",
   "rules": {
     "colors": "hex/rgb(a) literals",
@@ -7,7 +7,7 @@
   },
   "totals": {
     "colors": 271,
-    "rawText": 168
+    "rawText": 169
   },
   "files": {
     "dashboard/src/components/InsforgeUserHeaderControls.jsx": {
@@ -327,9 +327,10 @@
     },
     "dashboard/src/ui/dashboard/components/UsageLimitsPanel.test.jsx": {
       "colors": 0,
-      "rawText": 2,
+      "rawText": 3,
       "rawTextTokens": [
         ", ); // Brand name only — no plan_label suffix to avoid \"OpenCode Go Go\". expect(screen.getByText(\"OpenCode Go\")).toBeInTheDocument(); expect(screen.getByText(\"5h\")).toBeInTheDocument(); expect(screen.getByText(\"Weekly\")).toBeInTheDocument(); expect(screen.getByText(\"Monthly\")).toBeInTheDocument(); expect(screen.getByText(\"12%\")).toBeInTheDocument(); expect(screen.getByText(\"30%\")).toBeInTheDocument(); expect(screen.getByText(\"60%\")).toBeInTheDocument(); // Not-configured fallback. rerender(",
+        ", ); expect(screen.getByText(\"Codex\")).toBeInTheDocument(); expectLimitRow(\"Credits\", \"",
         ", ); expect(screen.getByText(\"Cursor\")).toBeInTheDocument(); rerender("
       ]
     },

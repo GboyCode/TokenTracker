@@ -471,6 +471,7 @@ menubar.metric.claude_5h,ui,WidgetsPage,MenuBarDisplayCard,metric_claude_5h,"Cla
 menubar.metric.claude_7d,ui,WidgetsPage,MenuBarDisplayCard,metric_claude_7d,"Claude 7d Limit",,active
 menubar.metric.codex_5h,ui,WidgetsPage,MenuBarDisplayCard,metric_codex_5h,"Codex 5h Limit",,active
 menubar.metric.codex_7d,ui,WidgetsPage,MenuBarDisplayCard,metric_codex_7d,"Codex 7d Limit",,active
+menubar.metric.codex_credits,ui,WidgetsPage,MenuBarDisplayCard,metric_codex_credits,"Codex Credit Limit",,active
 menubar.metric.codex_spark_5h,ui,WidgetsPage,MenuBarDisplayCard,metric_codex_spark_5h,"Codex Spark 5h Limit",,active
 menubar.metric.codex_spark_7d,ui,WidgetsPage,MenuBarDisplayCard,metric_codex_spark_7d,"Codex Spark 7d Limit",,active
 share.modal.title,share,DashboardPage,ShareModal,title,"Share your stats",,active
@@ -596,8 +597,10 @@ limits.label.claude_7d,ui,LimitsPage,UsageLimitsPanel,claude_7d,"7d",,active
 limits.label.claude_opus,ui,LimitsPage,UsageLimitsPanel,claude_opus,"Opus",,active
 limits.label.codex_5h,ui,LimitsPage,UsageLimitsPanel,codex_5h,"5h",,active
 limits.label.codex_7d,ui,LimitsPage,UsageLimitsPanel,codex_7d,"7d",,active
+limits.label.codex_credits,ui,LimitsPage,UsageLimitsPanel,codex_credits,"Credits",,active
 limits.label.codex_spark_5h,ui,LimitsPage,UsageLimitsPanel,codex_spark_5h,"Spark 5h",,active
 limits.label.codex_spark_7d,ui,LimitsPage,UsageLimitsPanel,codex_spark_7d,"Spark 7d",,active
+limits.codex_credits.detail,ui,LimitsPage,UsageLimitsPanel,codex_credits_detail,"{{used}} / {{limit}} credits used · {{remaining}} left",,active
 limits.codex_reset_bank.title,ui,LimitsPage,UsageLimitsPanel,codex_reset_bank_title,"Resets",,active
 limits.codex_reset_bank.row_label,ui,LimitsPage,UsageLimitsPanel,codex_reset_bank_row_label,"Reset {{index}}",,active
 limits.codex_reset_bank.count_only,ui,LimitsPage,UsageLimitsPanel,codex_reset_bank_count_only,"Reset Bank: {{count}} available · expiry unavailable",,active

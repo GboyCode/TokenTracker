@@ -10,6 +10,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
     case claude7d
     case codex5h
     case codex7d
+    case codexCredits
     case codexSpark5h
     case codexSpark7d
     case cursorPlan
@@ -45,6 +46,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
         case .claude7d: return "Cl 7d"
         case .codex5h: return "Cx 5h"
         case .codex7d: return "Cx 7d"
+        case .codexCredits: return "Cx Cred"
         case .codexSpark5h: return "Cx Spark 5h"
         case .codexSpark7d: return "Cx Spark 7d"
         case .cursorPlan: return "Cu Plan"
@@ -82,6 +84,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
         case .claude7d: return "Claude 7d Limit"
         case .codex5h: return "Codex 5h Limit"
         case .codex7d: return "Codex 7d Limit"
+        case .codexCredits: return "Codex Credit Limit"
         case .codexSpark5h: return "Codex Spark 5h Limit"
         case .codexSpark7d: return "Codex Spark 7d Limit"
         case .cursorPlan: return "Cursor Plan Limit"
@@ -114,7 +117,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
             return "tokens"
         case .todayCost, .totalCost:
             return "cost"
-        case .claude5h, .claude7d, .codex5h, .codex7d, .codexSpark5h, .codexSpark7d,
+        case .claude5h, .claude7d, .codex5h, .codex7d, .codexCredits, .codexSpark5h, .codexSpark7d,
              .cursorPlan, .cursorAuto, .cursorAPI,
              .geminiPro, .geminiFlash, .geminiLite,
              .kimiWeekly, .kimi5h, .kimiTotal,
@@ -135,7 +138,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
         case .todayTokens, .todayCost, .last7dTokens, .totalTokens, .totalCost:
             return nil
         case .claude5h, .claude7d: return "claude"
-        case .codex5h, .codex7d, .codexSpark5h, .codexSpark7d: return "codex"
+        case .codex5h, .codex7d, .codexCredits, .codexSpark5h, .codexSpark7d: return "codex"
         case .cursorPlan, .cursorAuto, .cursorAPI: return "cursor"
         case .geminiPro, .geminiFlash, .geminiLite: return "gemini"
         case .kimiWeekly, .kimi5h, .kimiTotal: return "kimi"
@@ -175,6 +178,7 @@ private extension UsageLimitsResponse {
         case .claude7d: return claude.sevenDay != nil
         case .codex5h: return codex.primaryWindow != nil
         case .codex7d: return codex.secondaryWindow != nil
+        case .codexCredits: return codex.creditWindow != nil
         case .codexSpark5h: return codex.sparkPrimaryWindow != nil
         case .codexSpark7d: return codex.sparkSecondaryWindow != nil
         case .cursorPlan: return cursor.primaryWindow != nil

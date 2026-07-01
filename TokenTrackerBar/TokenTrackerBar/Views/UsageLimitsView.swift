@@ -78,7 +78,8 @@ struct UsageLimitsView: View {
                 groups.append(AnyView(toolSection(id: id, title: planTitle("Claude", limits.claude.planLabel), assetName: "ClaudeLogo", toolName: "Claude", specs: claudeSpecs(limits.claude))))
             case "codex" where limits.codex.configured && limits.codex.error == nil:
                 let resetState = codexResetBankViewData(limits.codex.resetCredits)
-                groups.append(AnyView(toolSection(id: id, title: planTitle("Codex", limits.codex.planLabel), assetName: "CodexLogo", toolName: "Codex", specs: codexSpecs(limits.codex), resetRows: resetState.rows, resetStatus: resetState.statusText)))
+                let detailLines = [codexCreditDetail(limits.codex.creditWindow)].compactMap { $0 }
+                groups.append(AnyView(toolSection(id: id, title: planTitle("Codex", limits.codex.planLabel), assetName: "CodexLogo", toolName: "Codex", specs: codexSpecs(limits.codex), detailLines: detailLines, resetRows: resetState.rows, resetStatus: resetState.statusText)))
             case "cursor" where limits.cursor.configured && limits.cursor.error == nil:
                 groups.append(AnyView(toolSection(id: id, title: planTitle("Cursor", limits.cursor.planLabel), assetName: "CursorLogo", toolName: "Cursor", specs: cursorSpecs(limits.cursor))))
             case "gemini" where limits.gemini.configured && limits.gemini.error == nil:
@@ -122,6 +123,7 @@ struct UsageLimitsView: View {
         assetName: String?,
         toolName: String,
         specs: [LimitWindowSpec],
+        detailLines: [String] = [],
         resetRows: [CodexResetRowSpec] = [],
         resetStatus: String? = nil,
         footnote: String? = nil
@@ -143,6 +145,15 @@ struct UsageLimitsView: View {
             VStack(spacing: 4) {
                 ForEach(specs) { spec in
                     limitRow(label: spec.label, pct: spec.pct, reset: spec.resetText, toolName: toolName, windowSeconds: spec.windowSeconds, resetDate: spec.resetDate)
+                }
+            }
+            if !detailLines.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(detailLines, id: \.self) { line in
+                        Text(line)
+                            .font(.system(.caption2, design: .default))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             if !resetRows.isEmpty || resetStatus != nil {
@@ -185,9 +196,29 @@ struct UsageLimitsView: View {
         var s: [LimitWindowSpec] = []
         if let w = c.primaryWindow { s.append(makeSpec("5h", Double(w.usedPercent), windowSeconds: w.limitWindowSeconds.map(Double.init), epoch: w.resetAt)) }
         if let w = c.secondaryWindow { s.append(makeSpec("7d", Double(w.usedPercent), windowSeconds: w.limitWindowSeconds.map(Double.init), epoch: w.resetAt)) }
+        if let w = c.creditWindow { s.append(makeSpec(Strings.codexCreditsLabel, w.usedPercent, epoch: w.resetAt)) }
         if let w = c.sparkPrimaryWindow { s.append(makeSpec("Spark 5h", Double(w.usedPercent), windowSeconds: w.limitWindowSeconds.map(Double.init), epoch: w.resetAt)) }
         if let w = c.sparkSecondaryWindow { s.append(makeSpec("Spark 7d", Double(w.usedPercent), windowSeconds: w.limitWindowSeconds.map(Double.init), epoch: w.resetAt)) }
         return s
+    }
+
+    private func codexCreditDetail(_ window: CodexCreditWindow?) -> String? {
+        guard let used = formatCreditAmount(window?.usedCredits),
+              let limit = formatCreditAmount(window?.limitCredits),
+              let remaining = formatCreditAmount(window?.remainingCredits) else {
+            return nil
+        }
+        return Strings.codexCreditsDetail(used: used, limit: limit, remaining: remaining)
+    }
+
+    private func formatCreditAmount(_ value: Double?) -> String? {
+        guard let value, value.isFinite else { return nil }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: NativeLocalization.currentResolvedLocale)
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = value >= 100 ? 0 : 2
+        return formatter.string(from: NSNumber(value: value))
     }
 
     private func codexResetBankViewData(_ resetCredits: CodexLimits.ResetCredits?) -> (rows: [CodexResetRowSpec], statusText: String?) {

@@ -14,6 +14,13 @@ function formatExpiry(iso) {
   }).format(new Date(iso));
 }
 
+function formatAmount(value) {
+  return new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: value >= 100 ? 0 : 2,
+  }).format(value);
+}
+
 function credit(granted_at, expires_at) {
   return { status: "available", reset_type: "weekly", granted_at, expires_at };
 }
@@ -208,6 +215,40 @@ describe("UsageLimitsPanel", () => {
     expectLimitRow("7d", "30%");
     expectLimitRow("Spark 5h", "4%");
     expectLimitRow("Spark 7d", "18%");
+  });
+
+  it("renders Codex credit usage from spend controls", () => {
+    function expectLimitRow(label, value) {
+      const row = screen.getByText(label).closest("div");
+      expect(row).not.toBeNull();
+      expect(within(row).getByText(value)).toBeInTheDocument();
+    }
+
+    render(
+      <UsageLimitsPanel
+        codex={{
+          configured: true,
+          error: null,
+          credit_window: {
+            used_percent: 0.13609159692128498,
+            remaining_percent: 99.86390840307871,
+            reset_at: 1_785_542_400,
+            limit_credits: 37_500,
+            used_credits: 51.03434884548187,
+            remaining_credits: 37_448.96565115452,
+          },
+        }}
+        order={["codex"]}
+      />,
+    );
+
+    expect(screen.getByText("Codex")).toBeInTheDocument();
+    expectLimitRow("Credits", "<1%");
+    expect(
+      screen.getByText(
+        `${formatAmount(51.03434884548187)} / ${formatAmount(37_500)} credits used · ${formatAmount(37_448.96565115452)} left`,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("renders Codex Reset rows after quota rows without years, collapsed labels, or quota percentages", () => {
