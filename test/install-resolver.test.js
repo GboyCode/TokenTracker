@@ -8,9 +8,12 @@ const os = require("node:os");
 const { resolveInstallPaths, ensureNamespacedCursors } = require("../src/lib/install-resolver");
 const wsl = require("../src/lib/wsl-probe");
 
+const { mockPlatform } = require("./helpers/mock");
+
 // ── resolveInstallPaths ───────────────────────────────────────────────────────
 
-test("resolveInstallPaths returns single path on non-Windows", () => {
+test("resolveInstallPaths returns single path on non-Windows", (t) => {
+  mockPlatform(t, "linux");
   const r = resolveInstallPaths("hermes", { nativeValue: "/home/user/.hermes", wslDir: ".hermes" }, {}, {});
   assert.equal(r.native, "/home/user/.hermes");
   assert.equal(r.wsl, null);
