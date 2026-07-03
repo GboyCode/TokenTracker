@@ -461,6 +461,10 @@ Shields.io-kompatible Badges mit deinen aktuellen Gesamtwerten (60s Cache):
 
 Das Clawd-Charakterdesign gehört Anthropic. Dies ist ein Community-Projekt ohne offizielle Verbindung zu Anthropic.
 
+## 🔗 Links
+
+- [LINUX DO](https://linux.do) — eine Entwickler-Community
+
 ## Lizenz
 
 [MIT](LICENSE)

@@ -460,6 +460,10 @@ xattr -cr /Applications/TokenTrackerBar.app
 
 Clawd 角色设计归属 Anthropic。本项目是社区项目，和 Anthropic 无官方隶属关系。
 
+## 🔗 友情链接
+
+- [LINUX DO](https://linux.do) —— 新的理想型社区
+
 ## License
 
 [MIT](LICENSE)
