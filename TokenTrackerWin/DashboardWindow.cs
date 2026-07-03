@@ -452,7 +452,11 @@ internal sealed class DashboardWindow : Window
             html.native-windows-app #root .flex-1.min-w-0.min-h-0{
               padding-top:12px!important;
             }
-            html.native-windows-app body.tt-native-glass-shell>*{position:relative;z-index:1}
+            /* Lift the app content above the fixed ::before glass overlay. Scoped to
+               #root (NOT >*): body also hosts React portals (e.g. the heatmap hover
+               tooltip) whose class-based position:fixed a >* rule would override,
+               dropping them into normal flow at the page bottom (#252). */
+            html.native-windows-app body.tt-native-glass-shell>#root{position:relative;z-index:1}
             /* Sidebar must have NOTHING of its own — no fill, no border, no shadow, and
                crucially NO backdrop-filter. The committed styles.css gives the aside its
                own blur(30px), which double-blurs the sidebar region vs the top strip and

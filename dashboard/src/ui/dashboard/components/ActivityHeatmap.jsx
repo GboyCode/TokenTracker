@@ -866,6 +866,10 @@ export function ActivityHeatmap({
         <div
           className="fixed z-[9999] w-0 h-0 transition-all duration-100 ease-out pointer-events-none"
           style={{
+            // Inline position: the Windows WebView2 shell injects
+            // `body.tt-native-glass-shell>*{position:relative}` which outranks
+            // the `fixed` class on body-portaled children (#252).
+            position: "fixed",
             left: `${tooltipPos.x}px`,
             top: `${tooltipPos.y}px`,
           }}
