@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import { motion } from "motion/react";
-import { RotateCcw } from "lucide-react";
 import {
   DndContext,
   KeyboardSensor,
@@ -192,8 +191,6 @@ export function DashboardView(props) {
     onLeftReorder,
     rightCardOrder,
     onRightReorder,
-    isLayoutCustomized,
-    onResetLayout,
   } = props;
 
   // Header 和 Footer 已简化
@@ -506,18 +503,6 @@ export function DashboardView(props) {
         )}
         {!showAuthGate && !showExpiredGate && !initialDashboardLoading && (
           <>
-            {!screenshotMode && isLayoutCustomized ? (
-              <div className="flex justify-end mb-2">
-                <button
-                  type="button"
-                  onClick={onResetLayout}
-                  className="inline-flex items-center gap-1.5 text-xs text-oai-gray-400 hover:text-oai-gray-600 dark:text-oai-gray-500 dark:hover:text-oai-gray-300 transition-colors"
-                >
-                  <RotateCcw className="h-3 w-3" aria-hidden="true" />
-                  {copy("dashboard.overview.layout.reset")}
-                </button>
-              </div>
-            ) : null}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
               <div className="lg:col-span-4 flex flex-col gap-4 min-w-0 order-2 lg:order-1">
                 {leftColumnContent}

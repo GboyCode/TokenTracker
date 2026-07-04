@@ -1385,8 +1385,6 @@ export function DashboardPage({
       onLeftReorder={dashboardCardOrder.left.reorder}
       rightCardOrder={dashboardCardOrder.right.order}
       onRightReorder={dashboardCardOrder.right.reorder}
-      isLayoutCustomized={dashboardCardOrder.isCustomized}
-      onResetLayout={dashboardCardOrder.resetAll}
     />
     <ShareModal
       open={shareModalOpen}
