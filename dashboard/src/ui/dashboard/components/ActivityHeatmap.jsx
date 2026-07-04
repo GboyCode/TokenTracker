@@ -120,7 +120,7 @@ export function ActivityHeatmap({
   
   // 2D 精致 Hover 状态
   const [hoveredCell, setHoveredCell] = useState(null);
-  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0, shiftX: 0 });
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0, shiftX: 0, flipY: false });
   const hideTimeoutRef = useRef(null);
 
   // 卸载时回收防抖定时器
@@ -161,7 +161,7 @@ export function ActivityHeatmap({
     }
     setHoveredCell(cell);
 
-    // Tooltip is portaled to <body> with position: fixed, so use viewport
+    // Tooltip is portaled to document.body with position: fixed, so use viewport
     // coordinates directly. This keeps it visible inside the leaderboard
     // profile modal, where the Dialog.Popup has both `overflow-hidden` and
     // a `transform` (from the open/close transition) — that combo clips any
@@ -169,7 +169,11 @@ export function ActivityHeatmap({
     const rect = e.currentTarget.getBoundingClientRect();
     const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
     const x = rect.left + rect.width / 2;
-    const y = rect.top;
+
+    // Flip below the cell when there isn't room above (cells near the viewport
+    // top would clip the tooltip); 300px covers the tallest tooltip variant.
+    const flipY = rect.top < 300;
+    const y = flipY ? rect.bottom : rect.top;
 
     const halfWidth = 140;
     let shiftX = 0;
@@ -179,7 +183,7 @@ export function ActivityHeatmap({
       shiftX = (viewportWidth - halfWidth) - x;
     }
 
-    setTooltipPos({ x, y, shiftX });
+    setTooltipPos({ x, y, shiftX, flipY });
   };
 
   const handleCellMouseLeave = () => {
@@ -868,15 +872,15 @@ export function ActivityHeatmap({
           style={{
             // Inline position: the Windows WebView2 shell injects
             // `body.tt-native-glass-shell>*{position:relative}` which outranks
-            // the `fixed` class on body-portaled children (#252).
+            // the `fixed` class on body-portaled children (issue 252).
             position: "fixed",
             left: `${tooltipPos.x}px`,
             top: `${tooltipPos.y}px`,
           }}
         >
-          {/* Tooltip 玻璃外框（悬浮定位，底边固定在单元格上方） */}
-          <div 
-            className="absolute left-0 bottom-[10px] backdrop-blur-md bg-white/95 dark:bg-oai-gray-900/95 border border-oai-gray-200/50 dark:border-oai-gray-800/50 shadow-xl rounded-xl p-3.5 max-w-[280px] min-w-[200px] flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-100"
+          {/* Tooltip 玻璃外框（悬浮定位，默认底边固定在单元格上方；顶部空间不足时翻转到下方） */}
+          <div
+            className={`absolute left-0 ${tooltipPos.flipY ? "top-[10px]" : "bottom-[10px]"} backdrop-blur-md bg-white/95 dark:bg-oai-gray-900/95 border border-oai-gray-200/50 dark:border-oai-gray-800/50 shadow-xl rounded-xl p-3.5 max-w-[280px] min-w-[200px] flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-100`}
             style={{
               transform: `translateX(calc(-50% + ${tooltipPos.shiftX}px))`,
             }}
@@ -966,10 +970,10 @@ export function ActivityHeatmap({
             </div>
           </div>
           
-          {/* 倒三角小尾巴 */}
+          {/* 小尾巴（默认朝下指向单元格；翻转时朝上） */}
           <div
-            className="absolute bottom-[6px] left-0 -translate-x-1/2 w-2.5 h-2.5 rotate-45 bg-white dark:bg-oai-gray-900 border-r border-b border-oai-gray-200/50 dark:border-oai-gray-800/50 shadow-sm"
-            style={{ marginBottom: "1px" }}
+            className={`absolute left-0 -translate-x-1/2 w-2.5 h-2.5 rotate-45 bg-white dark:bg-oai-gray-900 shadow-sm ${tooltipPos.flipY ? "top-[6px] border-l border-t" : "bottom-[6px] border-r border-b"} border-oai-gray-200/50 dark:border-oai-gray-800/50`}
+            style={tooltipPos.flipY ? { marginTop: "1px" } : { marginBottom: "1px" }}
           />
         </div>,
         document.body,
