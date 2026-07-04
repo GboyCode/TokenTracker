@@ -24,17 +24,17 @@ function pathExists(p) {
   try { return fssync.existsSync(p) ? p : null; } catch (_e) { return null; }
 }
 
-function ensureNamespacedCursors(cursors, providerName) {
+function ensureNamespacedCursors(cursors, providerName, activeKey = "wsl") {
   const state = cursors[providerName] && typeof cursors[providerName] === "object" ? cursors[providerName] : {};
 
   if (state.native !== undefined || state.wsl !== undefined) {
     return state;
   }
 
-  cursors[providerName] = {
-    native: JSON.parse(JSON.stringify(state)),
-    wsl: JSON.parse(JSON.stringify(state)),
-  };
+  cursors[providerName] = { native: {}, wsl: {} };
+  if (Object.keys(state).length > 0) {
+    cursors[providerName][activeKey] = JSON.parse(JSON.stringify(state));
+  }
   return cursors[providerName];
 }
 
