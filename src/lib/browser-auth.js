@@ -223,7 +223,18 @@ function resolveBrowserLaunchCommand(
   } = {},
 ) {
   if (platform === "win32") {
-    return { command: "cmd", args: ["/c", "start", "", url] };
+    const escapedUrl = String(url).replace(/'/g, "''");
+    return {
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `Start-Process -FilePath '${escapedUrl}'`,
+      ],
+    };
   }
 
   if (isWslSession(env) && commandExists("wslview", { env, platform })) {
@@ -316,12 +327,15 @@ else
   open location "${url}"
 end if
 `;
-    try {
-      const child = spawn("osascript", ["-e", script], { stdio: "ignore", detached: true });
-      child.unref();
-      return true;
-    } catch (_e) {
-      // Fallback to plain open
+    if (commandExists("osascript", { env, platform })) {
+      try {
+        const child = spawn("osascript", ["-e", script], { stdio: "ignore", detached: true });
+        child.unref();
+        return true;
+      } catch (_e) {}
+    }
+
+    if (commandExists("open", { env, platform })) {
       try {
         const child = spawn("open", [url], { stdio: "ignore", detached: true });
         child.unref();
