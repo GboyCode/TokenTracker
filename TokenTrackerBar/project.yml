@@ -121,6 +121,11 @@ targets:
       - path: TokenTrackerBar/Models/LimitPace.swift
       - path: TokenTrackerBar/Models/WeeklyLimitResetDetector.swift
       - path: TokenTrackerBar/Models/BackgroundRefreshPolicy.swift
+      # WeeklyLimitResetDetector's window labels come from Strings, which
+      # resolves the locale via Shared/NativeLocalization (Shared is
+      # Foundation-only by design, so pulling the whole dir stays cheap).
+      - path: TokenTrackerBar/Utilities/Strings.swift
+      - path: Shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tokentracker.bar.tests
