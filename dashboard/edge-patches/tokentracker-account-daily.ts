@@ -241,6 +241,13 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   //    MTok in/out, cache_read $0.5/M; no cache-write surcharge so
   //    cache_write = input. ──
   "sakana/fugu-ultra": { input: 5, output: 30, cache_read: 0.5, cache_write: 5 },
+  // ── Meituan LongCat-2.0, seen via ZCode custom-provider routing (#276;
+  //    mirrored from src/lib/pricing/curated-overrides.json). Official
+  //    longcat.chat launch-promo rate: RMB 2/0.04(cache hit)/8 per MTok
+  //    in/read/out, converted at ~7.2 RMB/USD; standard list price is
+  //    RMB 5/0.10/20 once the promo ends — re-verify before changing. No
+  //    cache-write surcharge published, so cache_write = input. ──
+  "longcat-2.0": { input: 0.278, output: 1.111, cache_read: 0.00556, cache_write: 0.278 },
 };
 const ZERO_PRICING = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
 
@@ -314,6 +321,7 @@ function getModelPricing(model: string) {
   if (lower.includes("hy3")) return MODEL_PRICING["hy3-preview-agent"];
   if (lower.includes("composer")) return MODEL_PRICING["composer-1"];
   if (lower.includes("fugu")) return MODEL_PRICING["sakana/fugu-ultra"];
+  if (lower.includes("longcat")) return MODEL_PRICING["longcat-2.0"];
   if (lower === "auto") return MODEL_PRICING["composer-1"];
   return ZERO_PRICING;
 }

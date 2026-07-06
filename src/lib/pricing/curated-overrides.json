@@ -55,7 +55,8 @@
     "minimax-m2.1-free":{ "input": 0,    "output": 0,    "cache_read": 0 },
     "MiniMax-M2.1":     { "input": 0.5,  "output": 3,    "cache_read": 0.05 },
     "antigravity-gpt-oss-120b": { "input": 2.5, "output": 10, "cache_read": 0, "note": "Antigravity bridge alias. Approximate with GPT-4o-class pricing until Google exposes route-specific billing metadata." },
-    "sakana/fugu-ultra": { "input": 5,    "output": 30,   "cache_read": 0.5,   "cache_write": 5,    "note": "Sakana Fugu Ultra — multi-agent orchestration via an OpenAI-compatible API (sakana.ai PAYG + OpenRouter), used through Codex/Cursor/Cline/ZCode etc. OpenRouter rates: $5/$30 per MTok in/out, cache_read $0.5/M; no published cache-write surcharge, so cache_write = input. Subscriptions ($20/$100/$200) bill against this token-equivalent rate." }
+    "sakana/fugu-ultra": { "input": 5,    "output": 30,   "cache_read": 0.5,   "cache_write": 5,    "note": "Sakana Fugu Ultra — multi-agent orchestration via an OpenAI-compatible API (sakana.ai PAYG + OpenRouter), used through Codex/Cursor/Cline/ZCode etc. OpenRouter rates: $5/$30 per MTok in/out, cache_read $0.5/M; no published cache-write surcharge, so cache_write = input. Subscriptions ($20/$100/$200) bill against this token-equivalent rate." },
+    "longcat-2.0":      { "input": 0.278, "output": 1.111, "cache_read": 0.00556, "cache_write": 0.278, "note": "Meituan LongCat-2.0, seen via ZCode custom-provider routing (issue #276). Official longcat.chat/platform launch-promo rate: RMB 2 / 0.04 (cache hit) / 8 per MTok in/read/out, converted at ~7.2 RMB/USD. Standard list price is RMB 5/0.10/20 (2.5x) once the promo ends — re-verify against longcat.chat/platform/docs/zh/Pricing/LongCat-2.0.html before assuming either is permanent. DeepSeek-style cache: no write surcharge, so cache_write = input." }
   },
   "alias": {
     "auto": "composer-1"
@@ -86,6 +87,7 @@
     { "match": "glm-5.2",                "ref": "glm-5.2" },
     { "match": "glm-5.1",                "ref": "glm-5.1" },
     { "match": "glm-5",                  "ref": "glm-5" },
-    { "match": "fugu",                   "ref": "sakana/fugu-ultra" }
+    { "match": "fugu",                   "ref": "sakana/fugu-ultra" },
+    { "match": "longcat",                "ref": "longcat-2.0" }
   ]
 }
