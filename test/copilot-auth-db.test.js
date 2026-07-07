@@ -31,6 +31,14 @@ function makeAuthDbFixture(token, { authority = "github.com" } = {}) {
   };
 }
 
+function makeSchemaV0GithubToken() {
+  return ["gho", "1234567890abcdef1234567890abcdef1234"].join("_");
+}
+
+function schemaV0TokenHex(token = makeSchemaV0GithubToken()) {
+  return Buffer.from(token, "utf8").toString("hex");
+}
+
 describe("decryptCopilotAuthDbToken", () => {
   it("round-trips an AES-256-GCM token", () => {
     const { keyBase64, tokenHex } = makeAuthDbFixture("ghu_decrypted_example_token");
@@ -59,13 +67,45 @@ describe("decryptCopilotAuthDbToken", () => {
 describe("readCopilotAuthDbToken", () => {
   const okRunner = (keyBase64) => () => ({ status: 0, stdout: keyBase64 });
 
+  it("reads schema-v0 plaintext BLOB tokens without requiring a keychain item", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-copilot-authdb-v0-"));
+    try {
+      const expected = makeSchemaV0GithubToken();
+      let observedSql = "";
+      let keychainCalled = false;
+      const token = readCopilotAuthDbToken({
+        home: tmp,
+        platform: "darwin",
+        sqliteReader(dbPath, sql) {
+          assert.equal(dbPath, path.join(tmp, ".config", "github-copilot", "auth.db"));
+          observedSql = sql;
+          return [{
+            auth_authority: "github.com",
+            token_schema_version: 0,
+            token_hex: schemaV0TokenHex(expected),
+          }];
+        },
+        securityRunner() {
+          keychainCalled = true;
+          return { status: 1, stdout: "" };
+        },
+      });
+
+      assert.match(observedSql, /token_schema_version/);
+      assert.equal(keychainCalled, false);
+      assert.equal(token, expected);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("decrypts the token from auth.db via the keychain key (macOS)", () => {
     const { keyBase64, tokenHex } = makeAuthDbFixture("ghu_authdb_token");
     const token = readCopilotAuthDbToken({
       home: "/home/test",
       platform: "darwin",
       securityRunner: okRunner(keyBase64),
-      sqliteReader: () => [{ auth_authority: "github.com", token_hex: tokenHex }],
+      sqliteReader: () => [{ auth_authority: "github.com", token_schema_version: 1, token_hex: tokenHex }],
     });
     assert.equal(token, "ghu_authdb_token");
   });
@@ -79,27 +119,32 @@ describe("readCopilotAuthDbToken", () => {
       platform: "darwin",
       securityRunner: okRunner(publicHost.keyBase64),
       sqliteReader: () => [
-        { auth_authority: "github.example.com", token_hex: enterprise.tokenHex },
-        { auth_authority: "github.com", token_hex: publicHost.tokenHex },
+        { auth_authority: "github.example.com", token_schema_version: 1, token_hex: enterprise.tokenHex },
+        { auth_authority: "github.com", token_schema_version: 1, token_hex: publicHost.tokenHex },
       ],
     });
     assert.equal(token, "ghu_public");
   });
 
-  it("returns null on non-darwin platforms (no keychain reader yet)", () => {
+  it("returns null for encrypted rows on non-darwin platforms (no keychain reader yet)", () => {
     const { keyBase64, tokenHex } = makeAuthDbFixture("ghu_token");
     let readerCalled = false;
+    let keychainCalled = false;
     const token = readCopilotAuthDbToken({
       home: "/home/test",
       platform: "linux",
-      securityRunner: okRunner(keyBase64),
+      securityRunner: () => {
+        keychainCalled = true;
+        return { status: 0, stdout: keyBase64 };
+      },
       sqliteReader: () => {
         readerCalled = true;
-        return [{ auth_authority: "github.com", token_hex: tokenHex }];
+        return [{ auth_authority: "github.com", token_schema_version: 1, token_hex: tokenHex }];
       },
     });
     assert.equal(token, null);
-    assert.equal(readerCalled, false);
+    assert.equal(readerCalled, true);
+    assert.equal(keychainCalled, false);
   });
 
   it("returns null when the keychain key is unavailable", () => {
@@ -108,7 +153,7 @@ describe("readCopilotAuthDbToken", () => {
       home: "/home/test",
       platform: "darwin",
       securityRunner: () => ({ status: 1, stdout: "" }),
-      sqliteReader: () => [{ auth_authority: "github.com", token_hex: tokenHex }],
+      sqliteReader: () => [{ auth_authority: "github.com", token_schema_version: 1, token_hex: tokenHex }],
     });
     assert.equal(token, null);
   });
@@ -161,7 +206,7 @@ describe("readCopilotOauthToken precedence", () => {
         home: tmp, // no apps.json / hosts.json present
         platform: "darwin",
         securityRunner: () => ({ status: 0, stdout: keyBase64 }),
-        sqliteReader: () => [{ auth_authority: "github.com", token_hex: tokenHex }],
+        sqliteReader: () => [{ auth_authority: "github.com", token_schema_version: 1, token_hex: tokenHex }],
       });
       assert.equal(token, "ghu_fallback_token");
     } finally {
