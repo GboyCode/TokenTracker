@@ -43,6 +43,8 @@ test("status --json emits a JSON object with required summary fields", () => {
   assert.ok("pending_bytes" in parsed.queue);
   assert.ok("claude" in parsed.hooks);
   assert.ok("openclaw_session_plugin_conversation_access" in parsed.hooks);
+  assert.ok("app_db_has_file" in parsed.copilot);
+  assert.ok("app_db_path" in parsed.copilot);
   assert.equal(typeof parsed.device_token_set, "boolean");
 });
 

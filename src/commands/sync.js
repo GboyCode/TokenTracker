@@ -24,6 +24,7 @@ const {
   resolveKiroJsonlPath,
   resolveHermesPath,
   resolveCopilotOtelPaths,
+  resolveCopilotAppDbPaths,
   parseRolloutIncremental,
   parseClaudeIncremental,
   parseGeminiIncremental,
@@ -37,6 +38,7 @@ const {
   zedInstallOwnsCursor,
   hermesInstallOwnsCursor,
   parseCopilotIncremental,
+  parseCopilotAppDbIncremental,
   resolveKimiWireFiles,
   parseKimiIncremental,
   resolveKimiCodeWireFiles,
@@ -1342,7 +1344,7 @@ async function cmdSync(argv) {
       await repairGrokQueueFromSessionSnapshots({ cursors, queuePath, queueStatePath });
     }
 
-    // ── GitHub Copilot CLI (OTEL JSONL files) ──
+    // ── GitHub Copilot CLI / Chat extension (OTEL JSONL files) ──
     let copilotResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
     const copilotPaths = sourceAllowed("copilot") ? resolveCopilotOtelPaths(process.env) : [];
     if (copilotPaths.length > 0) {
@@ -1365,6 +1367,40 @@ async function cmdSync(argv) {
         });
       } catch (err) {
         warnProviderParseFailure("Copilot", err, opts);
+      }
+    }
+
+    // ── GitHub Copilot App (passive data.db session summaries) ──
+    const copilotAppDbPaths = sourceAllowed("copilot")
+      ? resolveCopilotAppDbPaths(process.env).filter((p) => {
+          try { return fssync.existsSync(p); } catch (_e) { return false; }
+        })
+      : [];
+    if (copilotAppDbPaths.length > 0) {
+      if (progress?.enabled) {
+        progress.start(`Parsing Copilot App ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        const copilotAppResult = await parseCopilotAppDbIncremental({
+          dbPaths: copilotAppDbPaths,
+          cursors,
+          queuePath,
+          env: process.env,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing Copilot App ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} sessions | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+        copilotResult = {
+          recordsProcessed: copilotResult.recordsProcessed + copilotAppResult.recordsProcessed,
+          eventsAggregated: copilotResult.eventsAggregated + copilotAppResult.eventsAggregated,
+          bucketsQueued: copilotResult.bucketsQueued + copilotAppResult.bucketsQueued,
+        };
+      } catch (err) {
+        warnProviderParseFailure("Copilot App", err, opts);
       }
     }
 

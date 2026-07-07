@@ -30,8 +30,9 @@ function warnSqliteUnavailable({ dbPath, label, cliError, nodeSqliteError, env, 
   }
 }
 
-function readSqliteRowsWithCli(dbPath, sql, { execFileSync, timeout, maxBuffer }) {
-  const raw = execFileSync("sqlite3", ["-json", dbPath, sql], {
+function readSqliteRowsWithCli(dbPath, sql, { execFileSync, timeout, maxBuffer, readOnly }) {
+  const args = readOnly ? ["-readonly", "-json", dbPath, sql] : ["-json", dbPath, sql];
+  const raw = execFileSync("sqlite3", args, {
     encoding: "utf8",
     maxBuffer,
     timeout,
@@ -92,7 +93,7 @@ function readSqliteJsonRows(dbPath, sql, options = {}) {
 
   let cliError = null;
   try {
-    return readSqliteRowsWithCli(dbPath, sql, { execFileSync, timeout, maxBuffer });
+    return readSqliteRowsWithCli(dbPath, sql, { execFileSync, timeout, maxBuffer, readOnly: Boolean(options.readOnly) });
   } catch (err) {
     cliError = err;
   }
@@ -114,11 +115,20 @@ function readSqliteJsonRows(dbPath, sql, options = {}) {
       stderr: options.stderr,
     });
   }
+  if (options.throwOnReadFailure) {
+    const err = new Error(
+      `Cannot read ${label} SQLite database at ${dbPath}: ${formatError(cliError)}; ${formatError(nodeSqliteError)}`,
+    );
+    err.cliError = cliError;
+    err.nodeSqliteError = nodeSqliteError;
+    throw err;
+  }
   return [];
 }
 
-async function readSqliteRowsWithCliAsync(dbPath, sql, { execFile, timeout, maxBuffer }) {
-  const { stdout } = await execFile("sqlite3", ["-json", dbPath, sql], {
+async function readSqliteRowsWithCliAsync(dbPath, sql, { execFile, timeout, maxBuffer, readOnly }) {
+  const args = readOnly ? ["-readonly", "-json", dbPath, sql] : ["-json", dbPath, sql];
+  const { stdout } = await execFile("sqlite3", args, {
     encoding: "utf8",
     maxBuffer,
     timeout,
@@ -149,7 +159,7 @@ async function readSqliteJsonRowsAsync(dbPath, sql, options = {}) {
 
   let cliError = null;
   try {
-    return await readSqliteRowsWithCliAsync(dbPath, sql, { execFile, timeout, maxBuffer });
+    return await readSqliteRowsWithCliAsync(dbPath, sql, { execFile, timeout, maxBuffer, readOnly: Boolean(options.readOnly) });
   } catch (err) {
     cliError = err;
   }
@@ -170,6 +180,14 @@ async function readSqliteJsonRowsAsync(dbPath, sql, options = {}) {
       env,
       stderr: options.stderr,
     });
+  }
+  if (options.throwOnReadFailure) {
+    const err = new Error(
+      `Cannot read ${label} SQLite database at ${dbPath}: ${formatError(cliError)}; ${formatError(nodeSqliteError)}`,
+    );
+    err.cliError = cliError;
+    err.nodeSqliteError = nodeSqliteError;
+    throw err;
   }
   return [];
 }

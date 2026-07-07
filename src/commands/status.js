@@ -60,6 +60,8 @@ const {
   resolveGrokBuildSessions,
   resolveHermesPath,
   resolveHermesDbPath,
+  resolveCopilotAppDbPath,
+  resolveCopilotAppDbPaths,
   probeWslDistros,
 } = require("../lib/rollout");
 const { getWslMode, isInvalidWslMode, shouldProbeWsl } = require("../lib/wsl-probe");
@@ -305,9 +307,18 @@ async function cmdStatus(argv = []) {
 
   const copilotToken = readCopilotOauthToken({ home });
   const copilotOtel = describeCopilotOtelStatus({ home, env: process.env });
+  const copilotAppDbPaths = resolveCopilotAppDbPaths(process.env);
+  const copilotAppExistingPaths = copilotAppDbPaths.filter((p) => {
+    try { return fssync.existsSync(p); } catch (_e) { return false; }
+  });
   const copilotLines = formatCopilotLines({
     token: copilotToken,
     otel: copilotOtel,
+    appDb: {
+      app_db_path: resolveCopilotAppDbPath(process.env),
+      app_db_paths: copilotAppExistingPaths,
+      app_db_has_file: copilotAppExistingPaths.length > 0,
+    },
   });
 
   // Detect passive-mode providers exactly once — both the JSON/light path
@@ -424,6 +435,9 @@ async function cmdStatus(argv = []) {
         otel_has_files: Boolean(copilotOtel.otel_has_files),
         otel_path: copilotOtel.otel_path || null,
         otel_enabled: Boolean(copilotOtel.otel_enabled),
+        app_db_has_file: copilotAppExistingPaths.length > 0,
+        app_db_path: resolveCopilotAppDbPath(process.env),
+        app_db_paths: copilotAppExistingPaths,
       },
       passive_mode: {
         active: isPassiveModeActive(passiveProviders),
@@ -555,11 +569,14 @@ async function cmdStatus(argv = []) {
   );
 }
 
-function formatCopilotLines({ token, otel }) {
-  if (!token && !otel.otel_has_files) return [];
+function formatCopilotLines({ token, otel, appDb }) {
+  if (!token && !otel.otel_has_files && !appDb?.app_db_has_file) return [];
   const limitsState = token
     ? "set (via GitHub OAuth)"
     : "unset (no Copilot OAuth token found)";
+  const appDbState = appDb?.app_db_has_file
+    ? `set (${(appDb.app_db_paths || []).join(", ")})`
+    : `not found (${appDb?.app_db_path || "unknown"})`;
   const usageState = otel.otel_has_files
     ? `set (${otel.otel_path || otel.otel_default_dir})`
     : otel.otel_enabled
@@ -567,11 +584,12 @@ function formatCopilotLines({ token, otel }) {
       : "unset (OTEL export not enabled)";
   const lines = [
     `- GitHub Copilot limits: ${limitsState}`,
-    `- GitHub Copilot usage (OTEL): ${usageState}`,
+    `- GitHub Copilot usage (App DB): ${appDbState}`,
+    `- GitHub Copilot usage (OTEL CLI/Chat extension): ${usageState}`,
   ];
   if (!otel.otel_has_files) {
     lines.push(
-      "    To track Copilot token usage, add to your shell profile:",
+      "    To track Copilot CLI / Chat extension token usage, add to your shell profile:",
       "      export COPILOT_OTEL_ENABLED=true",
       "      export COPILOT_OTEL_EXPORTER_TYPE=file",
       `      export COPILOT_OTEL_FILE_EXPORTER_PATH="${otel.otel_default_dir}/copilot-otel-$(date +%Y%m%d).jsonl"`,
@@ -673,6 +691,23 @@ function renderLightTable(summary) {
       detail.push(`WSL: ${info.wsl_distros.map((d) => `${d.name} (v${d.version ?? "?"})`).join(", ")}`);
     }
     push(`Provider · ${name}`, detail.length ? detail.join(", ") : "—");
+  }
+
+  if (summary.copilot) {
+    push(
+      "Copilot App DB",
+      summary.copilot.app_db_has_file
+        ? (summary.copilot.app_db_paths || [summary.copilot.app_db_path]).filter(Boolean).join(", ")
+        : `not found (${summary.copilot.app_db_path || "unknown"})`,
+    );
+    push(
+      "Copilot OTEL",
+      summary.copilot.otel_has_files
+        ? summary.copilot.otel_path || "files found"
+        : summary.copilot.otel_enabled
+          ? "enabled, no files"
+          : "not enabled",
+    );
   }
 
   if (summary.passive_mode) {

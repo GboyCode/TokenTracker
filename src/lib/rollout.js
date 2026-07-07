@@ -9449,6 +9449,370 @@ async function parseCopilotIncremental({ otelPaths, cursors, queuePath, onProgre
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GitHub Copilot App — passive reader for ~/.copilot/data.db
+//
+// The Copilot App persists one row per local App session in `sessions`, with
+// cumulative `total_*` token summary columns. We intentionally do NOT read
+// session-state/<id>/events.jsonl: forked App sessions inherit parent events
+// there before the child has produced any tokens, so parsing event history would
+// double-count parent usage. The only accounting source here is positive deltas
+// from the `sessions.total_*` counters. Those deltas feed the same aggregate
+// `source="copilot"` pipeline as existing OTEL data (dashboard totals, trends,
+// model breakdown, cost), but the cursor is separate (`cursors.copilotApp`) so
+// Copilot CLI / Chat extension OTEL support keeps its existing behavior.
+// Project attribution and per-conversation detail are intentionally absent:
+// data.db's summary columns do not expose privacy-safe project/message metadata.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const COPILOT_APP_CURSOR_VERSION = 1;
+const COPILOT_APP_DEFAULT_MODEL = "github-copilot";
+
+function normalizeCopilotAppDbPath(dbPath, env = process.env) {
+  if (typeof dbPath !== "string" || !dbPath.trim()) return null;
+  const expanded = expandHomePath(dbPath.trim(), env);
+  return path.isAbsolute(expanded) ? path.normalize(expanded) : path.resolve(expanded);
+}
+
+function resolveCopilotAppDbPaths(env = process.env) {
+  const home = env.HOME || require("node:os").homedir();
+  const paths = new Set();
+  const addDbPath = (dbPath) => {
+    const normalized = normalizeCopilotAppDbPath(dbPath, env);
+    if (normalized) paths.add(normalized);
+  };
+  const addHome = (homePath) => {
+    const normalizedHome = normalizeCopilotAppDbPath(homePath, env);
+    if (normalizedHome) addDbPath(path.join(normalizedHome, "data.db"));
+  };
+
+  if (typeof env.TOKENTRACKER_COPILOT_APP_DB === "string" && env.TOKENTRACKER_COPILOT_APP_DB.trim()) {
+    addDbPath(env.TOKENTRACKER_COPILOT_APP_DB);
+  }
+  if (typeof env.COPILOT_HOME === "string" && env.COPILOT_HOME.trim()) {
+    addHome(env.COPILOT_HOME);
+  }
+
+  const defaultDb = path.join(home, ".copilot", "data.db");
+  if (process.platform === "win32") {
+    const wslHome = wsl.shouldProbeWsl(env) ? wsl.discoverWslHome(".copilot", { env }) : null;
+    const wslDb = wslHome ? path.join(wslHome, "data.db") : null;
+    const resolved = resolveInstallPaths({ nativeValue: defaultDb, wslValue: wslDb }, env);
+    if (resolved.native) addDbPath(resolved.native);
+    if (resolved.wsl) addDbPath(resolved.wsl);
+    if (paths.size === 0 && wsl.shouldProbeNative(env)) addDbPath(defaultDb);
+  } else {
+    addDbPath(defaultDb);
+  }
+
+  return Array.from(paths).sort();
+}
+
+function resolveCopilotAppDbPath(env = process.env) {
+  const paths = resolveCopilotAppDbPaths(env);
+  for (const candidate of paths) {
+    try {
+      if (fssync.existsSync(candidate)) return candidate;
+    } catch (_e) {}
+  }
+  return paths[0] || null;
+}
+
+function shouldCountCopilotAppSession(row) {
+  const sessionType = typeof row?.session_type === "string" ? row.session_type.trim().toLowerCase() : "";
+  const providerId = typeof row?.provider_id === "string" ? row.provider_id.trim().toLowerCase() : "";
+  // OTEL remains the owner for recognizable Copilot CLI / VS Code extension
+  // sessions. The App DB path is separately cursored, but skipping known
+  // OTEL-backed surfaces avoids duplicate source="copilot" buckets if GitHub
+  // mirrors those sessions into data.db in a future release.
+  const markers = [sessionType, providerId];
+  return !markers.some((value) =>
+    value === "cli" ||
+    value === "copilot-cli" ||
+    value.includes("vscode") ||
+    value.includes("extension") ||
+    value.includes("otel")
+  );
+}
+
+function parseCopilotAppTimestamp(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") {
+    const ms = value > 10_000_000_000 ? value : value * 1000;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\d+$/.test(trimmed)) {
+    return parseCopilotAppTimestamp(Number(trimmed));
+  }
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function normalizeCopilotAppModel(model) {
+  if (typeof model !== "string") return "";
+  const normalized = normalizeModelInput(model);
+  if (!normalized) return "";
+  if (/^claude-(sonnet|opus|haiku)-\d+\.\d+/.test(normalized)) {
+    return normalized.replace(/^(claude-(?:sonnet|opus|haiku)-\d+)\.(\d+)/, "$1-$2");
+  }
+  return normalized;
+}
+
+function readCopilotAppSessionsFromSqlite(dbPath, sqliteOptions = {}) {
+  const pragmaRows = readSqliteJsonRows(dbPath, "PRAGMA table_info(sessions)", {
+    label: "GitHub Copilot App",
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: 10_000,
+    readOnly: true,
+    throwOnReadFailure: true,
+    ...sqliteOptions,
+  });
+  const columns = new Set(pragmaRows.map((row) => row?.name).filter(Boolean));
+  if (!columns.has("id")) return [];
+  const optional = (col) => (columns.has(col) ? col : `NULL AS ${col}`);
+  const orderTerms = ["updated_at", "created_at"].filter((col) => columns.has(col));
+  const orderBy = orderTerms.length > 0
+    ? `ORDER BY COALESCE(${orderTerms.join(", ")}, ''), id`
+    : "ORDER BY id";
+  const sql = `
+    SELECT
+      id,
+      ${optional("title")},
+      ${optional("session_type")},
+      ${optional("mode")},
+      ${optional("model")},
+      ${optional("provider_id")},
+      ${optional("created_at")},
+      ${optional("updated_at")},
+      ${optional("forked_from_session_id")},
+      ${optional("fork_original_history_event_count")},
+      ${optional("total_input_tokens")},
+      ${optional("total_output_tokens")},
+      ${optional("total_cached_tokens")},
+      ${optional("total_reasoning_tokens")},
+      ${optional("total_nano_aiu")}
+    FROM sessions
+    ${orderBy}
+  `.trim();
+  return readSqliteJsonRows(dbPath, sql, {
+    label: "GitHub Copilot App",
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: 60_000,
+    readOnly: true,
+    throwOnReadFailure: true,
+    ...sqliteOptions,
+  });
+}
+
+function sqliteSidecarFingerprint(dbPath) {
+  const out = {};
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    const filePath = `${dbPath}${suffix}`;
+    try {
+      const stat = fssync.statSync(filePath);
+      out[suffix || "db"] = {
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        ino: stat.ino,
+      };
+    } catch (e) {
+      if (!e || e.code !== "ENOENT") throw e;
+    }
+  }
+  return out;
+}
+
+function sameSqliteFingerprint(a, b) {
+  return JSON.stringify(a || {}) === JSON.stringify(b || {});
+}
+
+function copilotAppBaselineTotal(value) {
+  if (!value || typeof value !== "object") return 0;
+  return (
+    Number(value.input || 0) +
+    Number(value.output || 0) +
+    Number(value.cached || 0) +
+    Number(value.reasoning || 0)
+  );
+}
+
+function capCopilotAppSessionTotals(sessionTotals, maxEntries = 10_000) {
+  const entries = Object.entries(sessionTotals);
+  if (entries.length <= maxEntries) return sessionTotals;
+
+  const nonzero = [];
+  const zero = [];
+  for (const entry of entries) {
+    if (copilotAppBaselineTotal(entry[1]) > 0) nonzero.push(entry);
+    else zero.push(entry);
+  }
+
+  zero.sort((a, b) => {
+    const ta = Date.parse(a[1]?.updatedAt || "") || 0;
+    const tb = Date.parse(b[1]?.updatedAt || "") || 0;
+    return tb - ta;
+  });
+  const zeroBudget = Math.max(0, maxEntries - nonzero.length);
+  const capped = Object.fromEntries([...nonzero, ...zero.slice(0, zeroBudget)]);
+  for (const key of Object.keys(sessionTotals)) delete sessionTotals[key];
+  Object.assign(sessionTotals, capped);
+  return sessionTotals;
+}
+
+function normalizeCopilotAppTokenDelta(curr, prev) {
+  const inputDelta = Math.max(0, Number(curr?.input || 0) - Number(prev?.input || 0));
+  const cachedDelta = Math.max(0, Number(curr?.cached || 0) - Number(prev?.cached || 0));
+  const cachedInputTokens = Math.min(cachedDelta, inputDelta);
+  const inputTokens = Math.max(0, inputDelta - cachedInputTokens);
+  const outputTokens = Math.max(0, Number(curr?.output || 0) - Number(prev?.output || 0));
+  const reasoningTokens = Math.max(0, Number(curr?.reasoning || 0) - Number(prev?.reasoning || 0));
+  const totalTokens = inputTokens + cachedInputTokens + outputTokens + reasoningTokens;
+  return {
+    input_tokens: inputTokens,
+    cached_input_tokens: cachedInputTokens,
+    cache_creation_input_tokens: 0,
+    output_tokens: outputTokens,
+    reasoning_output_tokens: reasoningTokens,
+    total_tokens: totalTokens,
+    conversation_count: copilotAppBaselineTotal(prev) === 0 && totalTokens > 0 ? 1 : 0,
+  };
+}
+
+async function parseCopilotAppDbIncremental({
+  dbPath,
+  dbPaths,
+  cursors,
+  queuePath,
+  onProgress,
+  env,
+  sqliteOptions,
+} = {}) {
+  await ensureDir(path.dirname(queuePath));
+  const paths = Array.isArray(dbPaths) && dbPaths.length > 0
+    ? dbPaths
+    : dbPath
+      ? [dbPath]
+      : resolveCopilotAppDbPaths(env || process.env);
+  const uniquePaths = [...new Set(paths.map((p) => normalizeCopilotAppDbPath(p, env || process.env)).filter(Boolean))];
+  const appState =
+    cursors.copilotApp && typeof cursors.copilotApp === "object" ? cursors.copilotApp : {};
+  const dbStates =
+    appState.dbs && typeof appState.dbs === "object" ? { ...appState.dbs } : {};
+  const hourlyState = normalizeHourlyState(cursors?.hourly);
+  const touchedBuckets = new Set();
+  const cb = typeof onProgress === "function" ? onProgress : null;
+  let recordsProcessed = 0;
+  let eventsAggregated = 0;
+  let totalRows = 0;
+  const updatedAt = new Date().toISOString();
+
+  for (const resolvedDb of uniquePaths) {
+    let currentFingerprint = null;
+    try {
+      fssync.statSync(resolvedDb);
+      currentFingerprint = sqliteSidecarFingerprint(resolvedDb);
+    } catch (e) {
+      if (e && e.code === "ENOENT") continue;
+      throw e;
+    }
+
+    const dbState = dbStates[resolvedDb] && typeof dbStates[resolvedDb] === "object"
+      ? dbStates[resolvedDb]
+      : {};
+    const sessionTotals =
+      dbState.sessionTotals && typeof dbState.sessionTotals === "object"
+        ? { ...dbState.sessionTotals }
+        : {};
+    if (dbState.lastDbFingerprint && sameSqliteFingerprint(currentFingerprint, dbState.lastDbFingerprint)) {
+      dbStates[resolvedDb] = { ...dbState, sessionTotals, updatedAt };
+      continue;
+    }
+
+    const snap = snapshotSqliteDb(resolvedDb);
+    let rows = [];
+    try {
+      rows = readCopilotAppSessionsFromSqlite(snap.path, sqliteOptions);
+    } finally {
+      snap.cleanup();
+    }
+    totalRows += rows.length;
+
+    for (const row of rows) {
+      recordsProcessed++;
+      if (!row || typeof row.id !== "string" || !row.id.trim()) continue;
+      if (!shouldCountCopilotAppSession(row)) continue;
+
+      const sessionId = row.id.trim();
+      const curr = {
+        input: toNonNegativeInt(row.total_input_tokens),
+        output: toNonNegativeInt(row.total_output_tokens),
+        cached: toNonNegativeInt(row.total_cached_tokens),
+        reasoning: toNonNegativeInt(row.total_reasoning_tokens),
+      };
+      const prev = sessionTotals[sessionId] || { input: 0, output: 0, cached: 0, reasoning: 0 };
+      const bucketDelta = normalizeCopilotAppTokenDelta(curr, prev);
+      const totalDelta = bucketDelta.total_tokens;
+      const rowUpdatedAt =
+        parseCopilotAppTimestamp(row.updated_at) ||
+        parseCopilotAppTimestamp(row.created_at) ||
+        updatedAt;
+      const model = normalizeCopilotAppModel(row.model) || COPILOT_APP_DEFAULT_MODEL;
+
+      if (totalDelta <= 0) {
+        sessionTotals[sessionId] = { ...curr, model, updatedAt: rowUpdatedAt };
+        continue;
+      }
+
+      const bucketStart = toUtcHalfHourStart(rowUpdatedAt);
+      if (!bucketStart) {
+        sessionTotals[sessionId] = { ...curr, model, updatedAt: rowUpdatedAt };
+        continue;
+      }
+
+      const bucket = getHourlyBucket(hourlyState, "copilot", model, bucketStart);
+      addTotals(bucket.totals, bucketDelta);
+      touchedBuckets.add(bucketKey("copilot", model, bucketStart));
+      sessionTotals[sessionId] = { ...curr, model, updatedAt: rowUpdatedAt };
+      eventsAggregated++;
+
+      if (cb) {
+        cb({
+          index: recordsProcessed,
+          total: Math.max(totalRows, recordsProcessed),
+          recordsProcessed,
+          eventsAggregated,
+          bucketsQueued: touchedBuckets.size,
+        });
+      }
+    }
+
+    capCopilotAppSessionTotals(sessionTotals);
+
+    dbStates[resolvedDb] = {
+      ...dbState,
+      sessionTotals,
+      lastDbFingerprint: currentFingerprint,
+      updatedAt,
+    };
+  }
+
+  const bucketsQueued = await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets });
+  hourlyState.updatedAt = updatedAt;
+  cursors.hourly = hourlyState;
+  cursors.copilotApp = {
+    ...appState,
+    version: COPILOT_APP_CURSOR_VERSION,
+    dbs: dbStates,
+    updatedAt,
+  };
+
+  return { recordsProcessed, eventsAggregated, bucketsQueued };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Grok Build (xAI) — passive reader for ~/.grok/sessions/**/updates.jsonl + signals.json
 // Triggered either by full scan in sync or by the SessionEnd hook writing a signal.
 // updates.jsonl exposes cumulative totalTokens metadata. Grok still does not
@@ -10363,6 +10727,9 @@ module.exports = {
   probeWslDistros,
   discoverWslHermesHome,
   resolveCopilotOtelPaths,
+  resolveCopilotAppDbPath,
+  resolveCopilotAppDbPaths,
+  readCopilotAppSessionsFromSqlite,
   parseRolloutIncremental,
   parseClaudeIncremental,
   parseGeminiIncremental,
@@ -10376,6 +10743,7 @@ module.exports = {
   zedInstallOwnsCursor,
   hermesInstallOwnsCursor,
   parseCopilotIncremental,
+  parseCopilotAppDbIncremental,
   resolveKimiWireFiles,
   resolveKimiDefaultModel,
   parseKimiIncremental,
