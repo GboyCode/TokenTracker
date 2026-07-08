@@ -37,11 +37,11 @@ const RING_SLOTS = [
 // above it (no scrim fighting, no text overlap).
 export const DISC = {
   radius: 13, // disc-body outer radius (world units) — geometry + shader share it
-  tilt: -0.5, // radians; combined with the elevated camera → strong top-down perspective
-  flatten: 0.8, // mild squash — most of the foreshortening comes from the camera angle
+  tilt: -0.58, // radians; combined with the elevated camera → strong top-down perspective
+  flatten: 0.72, // mild squash — most of the foreshortening comes from the camera angle
   swirl: 2.6, // spiral sweep from rim to core — high enough that streams wrap into arms
-  cameraZ: 21,
-  cameraY: 8.5, // elevated eye point looking down at the disc center
+  cameraZ: 17,
+  cameraY: 7.0, // elevated eye point looking down at the disc center
   cameraDollyIn: 7, // extra distance the camera starts back at, for the entrance dolly
   cameraPushIn: 11, // how far the camera dives toward the core at full scroll progress
   introSeconds: 2.4, // entrance duration: streams grow from the chips into the core
@@ -114,8 +114,8 @@ export function staticChipPositions() {
 // height — far (upper) orbs shrink, near (lower) ones grow. Also applied
 // live as orbs orbit, so an orb visibly grows while swinging to the front.
 export function slotDepthFactor(top) {
-  const clamped = Math.min(88, Math.max(18, top));
-  return 0.55 + ((clamped - 18) / 70) * 0.8;
+  const clamped = Math.min(79, Math.max(9, top));
+  return 0.35 + ((clamped - 9) / 70) * 1.15;
 }
 
 export const GALAXY_VERTEX = /* glsl */ `
@@ -281,7 +281,7 @@ export const GALAXY_VERTEX = /* glsl */ `
     float dist = max(0.001, -mv.z);
     // Exaggerated near-big/far-small: particles low in the frame (near side
     // of the tilted disc) render larger than the far ones behind the copy.
-    float depthK = mix(1.45, 0.6, smoothstep(-10.0, 8.0, p.y));
+    float depthK = mix(1.85, 0.45, smoothstep(-10.0, 8.0, p.y));
     gl_PointSize = aSize * uPixelRatio * (26.0 / dist) * depthK * (1.0 + glow * 1.7) * sizeMultiplier;
 
     vColor = mix(mix(uColorA, uColorB, aSeed), uColorC, clamp(glow, 0.0, 1.0) * 0.85);

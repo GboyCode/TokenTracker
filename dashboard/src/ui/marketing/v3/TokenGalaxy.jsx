@@ -132,7 +132,7 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
     mount.appendChild(canvas);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 120);
+    const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 120);
     camera.position.set(0, 0, DISC.cameraZ);
 
     const anchors = computeAnchors();
