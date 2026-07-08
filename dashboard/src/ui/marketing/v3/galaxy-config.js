@@ -267,6 +267,7 @@ export const GALAXY_VERTEX = /* glsl */ `
     vec3 bh_cam = (modelViewMatrix * vec4(0.0, uYOffset, 0.0, 1.0)).xyz;
     vec2 toParticle = mv.xy - bh_cam.xy;
     float r_cam = length(toParticle);
+    float lensGlow = 0.0;
     if (r_cam > 0.001) {
       float R_E = 1.35;
       float R_horizon = 0.65;
@@ -283,6 +284,9 @@ export const GALAXY_VERTEX = /* glsl */ `
       
       // Warp Z coordinate forward proportional to the lensing shift
       mv.z += (r_lensed - r_cam) * 0.35;
+      
+      // Calculate gravitational magnification light effect (lensGlow)
+      lensGlow = 1.6 / (r_cam + 0.25);
     }
 
     gl_Position = projectionMatrix * mv;
@@ -290,9 +294,14 @@ export const GALAXY_VERTEX = /* glsl */ `
     // Exaggerated near-big/far-small: particles low in the frame (near side
     // of the tilted disc) render larger than the far ones behind the copy.
     float depthK = mix(1.85, 0.45, smoothstep(-10.0, 8.0, p.y));
-    gl_PointSize = aSize * uPixelRatio * (26.0 / dist) * depthK * (1.0 + glow * 1.7) * sizeMultiplier;
+    
+    // Scale particle sizes up based on lensing magnification
+    sizeMultiplier *= 1.0 + clamp(lensGlow - 1.0, 0.0, 3.0) * 0.45;
+    gl_PointSize = aSize * uPixelRatio * (26.0 / dist) * depthK * (1.0 + (glow + lensGlow * 0.35) * 1.7) * sizeMultiplier;
 
-    vColor = mix(mix(uColorA, uColorB, aSeed), uColorC, clamp(glow, 0.0, 1.0) * 0.85);
+    // Apply lensing color boost: blend into bright hot white/blue light at the Einstein Ring
+    vColor = mix(mix(uColorA, uColorB, aSeed), uColorC, clamp(glow + lensGlow * 0.35, 0.0, 1.0) * 0.85);
+    vColor = mix(vColor, vec3(1.0, 1.0, 1.0) * 1.5, clamp((lensGlow - 1.5) * 0.4, 0.0, 1.0));
     vColor = mix(vColor, flashColor, flash * 0.95);
     vAlpha = alpha;
     vGlow = glow;
