@@ -915,7 +915,7 @@ function arraysEqual(a, b) {
 
 async function shouldRepairCodexNotify({ currentNotify, expectedNotify, notifyOriginalPath }) {
   if (!Array.isArray(currentNotify) || currentNotify.length === 0) {
-    return { repair: true, captureOriginal: false };
+    return { repair: true, captureOriginal: true, replaceOriginal: true };
   }
   if (arraysEqual(currentNotify, expectedNotify)) {
     return { repair: false, reason: "already-set" };
