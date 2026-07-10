@@ -64,6 +64,10 @@ class DashboardViewModel: ObservableObject {
 
     private var refreshTask: Task<Void, Never>?
     private var resetBoundaryRefreshTask: Task<Void, Never>?
+    /// Reentrancy guard shared by every sync path. Unlike the published
+    /// `isSyncing` (which only drives the sync animation), this is also set
+    /// during silent syncs so concurrent sync requests are still coalesced.
+    private var syncInFlight = false
     private var lastBackgroundSyncAt: Date?
     private var lastPopoverOpenSyncAttemptAt: Date?
     private var shouldReloadAfterCurrentLoad = false
@@ -250,10 +254,17 @@ class DashboardViewModel: ObservableObject {
     // MARK: - Sync
 
     /// Initial launch: sync data first, then load dashboard.
-    func syncThenLoad() async {
-        guard !isSyncing else { return }
-        isSyncing = true
-        defer { isSyncing = false }
+    /// `silent` keeps the published `isSyncing` flag untouched so opportunistic
+    /// syncs (popover open) refresh data without playing the sync animation
+    /// over already-cached content.
+    func syncThenLoad(silent: Bool = false) async {
+        guard !syncInFlight else { return }
+        syncInFlight = true
+        if !silent { isSyncing = true }
+        defer {
+            syncInFlight = false
+            if !silent { isSyncing = false }
+        }
         var didSync = false
         do {
             _ = try await APIClient.shared.triggerSync(auto: true)
@@ -284,7 +295,7 @@ class DashboardViewModel: ObservableObject {
         syncInterval: TimeInterval = BackgroundRefreshPolicy.defaultPopoverOpenSyncInterval,
         loadInterval: TimeInterval = BackgroundRefreshPolicy.defaultPopoverOpenLoadInterval
     ) async {
-        guard !isLoading, !isSyncing else { return }
+        guard !isLoading, !syncInFlight else { return }
         let shouldSync = BackgroundRefreshPolicy.shouldRunPopoverOpenSync(
             now: now,
             lastAttemptAt: lastPopoverOpenSyncAttemptAt,
@@ -293,7 +304,7 @@ class DashboardViewModel: ObservableObject {
         )
         if shouldSync {
             lastPopoverOpenSyncAttemptAt = now
-            await syncThenLoad()
+            await syncThenLoad(silent: true)
         } else if BackgroundRefreshPolicy.shouldRunPopoverOpenLoad(
             now: now,
             lastRefreshedAt: lastRefreshed,
@@ -304,7 +315,8 @@ class DashboardViewModel: ObservableObject {
     }
 
     func triggerSync() async {
-        guard !isSyncing else { return }
+        guard !syncInFlight else { return }
+        syncInFlight = true
         isSyncing = true
         do {
             _ = try await APIClient.shared.triggerSync(drain: true)
@@ -314,6 +326,7 @@ class DashboardViewModel: ObservableObject {
             self.error = error.localizedDescription
         }
         isSyncing = false
+        syncInFlight = false
     }
 
     // MARK: - Auto Refresh

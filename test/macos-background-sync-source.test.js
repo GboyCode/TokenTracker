@@ -24,7 +24,7 @@ test("macOS background sync sends auto background while Sync Now drains", () => 
   );
   assert.match(
     viewModel,
-    /func syncThenLoad\(\)[\s\S]*APIClient\.shared\.triggerSync\(auto: true\)/,
+    /func syncThenLoad\(silent: Bool = false\)[\s\S]*APIClient\.shared\.triggerSync\(auto: true\)/,
   );
   assert.match(
     viewModel,

@@ -118,6 +118,27 @@ test("menu-bar popover is anchored to an app-owned positioning window", () => {
   const viewModel = fs.readFileSync(viewModelPath, "utf8");
   assert.match(
     viewModel,
+    /lastPopoverOpenSyncAttemptAt\s*=\s*now\s*await\s+syncThenLoad\(silent:\s*true\)/,
+    "Popover-open opportunistic sync must stay silent so it never plays the sync animation over cached content.",
+  );
+  const refreshPolicy = fs.readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "TokenTrackerBar",
+      "TokenTrackerBar",
+      "Models",
+      "BackgroundRefreshPolicy.swift",
+    ),
+    "utf8",
+  );
+  assert.match(
+    refreshPolicy,
+    /static let defaultPopoverOpenSyncInterval: TimeInterval = 300/,
+    "Popover-open sync should match the background sync cadence instead of re-syncing every minute.",
+  );
+  assert.match(
+    viewModel,
     /shouldRunPopoverOpenLoad\([\s\S]*lastRefreshed/,
     "When popover sync is throttled, dashboard reload should also be debounced by lastRefreshed.",
   );

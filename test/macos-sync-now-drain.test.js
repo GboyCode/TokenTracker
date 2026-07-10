@@ -26,7 +26,7 @@ test("macOS manual Sync now requests drain while launch sync stays lightweight",
   );
   assert.match(
     viewModel,
-    /func syncThenLoad\(\)[\s\S]*APIClient\.shared\.triggerSync\(auto: true\)/,
+    /func syncThenLoad\(silent: Bool = false\)[\s\S]*APIClient\.shared\.triggerSync\(auto: true\)/,
     "initial/background sync should use the auto path",
   );
   assert.match(
