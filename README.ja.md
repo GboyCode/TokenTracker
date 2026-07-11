@@ -172,8 +172,8 @@ brew install mm7894215/tokentracker/tokentracker
 | **OpenClaw** | ✅ 自動 | セッションプラグイン |
 | **Every Code** | ✅ 自動 | TOML notify hook |
 | **Hermes Agent** | ✅ 自動 | SQLite の sessions テーブル (`~/.hermes/state.db`) |
-| **GitHub Copilot App** | ✅ 自動 | パッシブなセッションサマリー読み取り (`~/.copilot/data.db`、または `COPILOT_HOME/data.db`) |
-| **GitHub Copilot CLI / Chat 拡張** | ✅ 自動 | OpenTelemetry のファイルエクスポーター (`COPILOT_OTEL_FILE_EXPORTER_PATH`) |
+| **GitHub Copilot App / CLI** | ✅ 自動 | リクエスト単位の統合 SQLite 使用量 (`~/.copilot/session-store.db`)、App DB はフォールバック |
+| **GitHub Copilot Chat 拡張 / 旧 CLI** | ✅ 自動 | OpenTelemetry のファイルエクスポーター (`COPILOT_OTEL_FILE_EXPORTER_PATH`) |
 | **Kimi Code** | ✅ 自動 | パッシブな `wire.jsonl` リーダー (`~/.kimi/sessions/**/wire.jsonl`) |
 | **oh-my-pi (Pi Coding Agent)** | ✅ 自動 | パッシブリーダー (`~/.omp/agent/sessions/**/*.jsonl`) |
 | **CodeBuddy** (Tencent) | ✅ 自動 | `~/.codebuddy/settings.json` 内の SessionEnd hook（Claude-Code fork） |

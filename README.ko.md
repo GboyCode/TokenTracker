@@ -172,8 +172,8 @@ brew install mm7894215/tokentracker/tokentracker
 | **OpenClaw** | ✅ 자동 | 세션 플러그인 |
 | **Every Code** | ✅ 자동 | TOML notify hook |
 | **Hermes Agent** | ✅ 자동 | SQLite sessions 테이블 (`~/.hermes/state.db`) |
-| **GitHub Copilot App** | ✅ 자동 | 패시브 세션 요약 리더 (`~/.copilot/data.db`, 또는 `COPILOT_HOME/data.db`) |
-| **GitHub Copilot CLI / Chat 확장** | ✅ 자동 | OpenTelemetry 파일 익스포터 (`COPILOT_OTEL_FILE_EXPORTER_PATH`) |
+| **GitHub Copilot App / CLI** | ✅ 자동 | 요청별 통합 SQLite 사용량 (`~/.copilot/session-store.db`), App DB는 폴백 |
+| **GitHub Copilot Chat 확장 / 이전 CLI** | ✅ 자동 | OpenTelemetry 파일 익스포터 (`COPILOT_OTEL_FILE_EXPORTER_PATH`) |
 | **Kimi Code** | ✅ 자동 | 패시브 `wire.jsonl` 리더 (`~/.kimi/sessions/**/wire.jsonl`) |
 | **oh-my-pi (Pi Coding Agent)** | ✅ 자동 | 패시브 리더 (`~/.omp/agent/sessions/**/*.jsonl`) |
 | **CodeBuddy** (Tencent) | ✅ 자동 | `~/.codebuddy/settings.json`의 SessionEnd hook (Claude-Code fork) |

@@ -24,6 +24,8 @@ const {
   resolveKiroJsonlPath,
   resolveHermesPath,
   resolveCopilotOtelPaths,
+  resolveCopilotSessionStorePaths,
+  getCopilotSqliteFingerprint,
   resolveCopilotAppDbPaths,
   parseRolloutIncremental,
   parseClaudeIncremental,
@@ -38,6 +40,8 @@ const {
   zedInstallOwnsCursor,
   hermesInstallOwnsCursor,
   parseCopilotIncremental,
+  parseCopilotSessionStoreIncremental,
+  finalizeCopilotStoreLegacyCatchup,
   parseCopilotAppDbIncremental,
   resolveKimiWireFiles,
   parseKimiIncremental,
@@ -1326,19 +1330,104 @@ async function cmdSync(argv) {
       await repairGrokQueueFromSessionSnapshots({ cursors, queuePath, queueStatePath });
     }
 
-    // ── GitHub Copilot CLI / Chat extension (OTEL JSONL files) ──
+    // ── GitHub Copilot App / CLI unified local runtime ──
+    //
+    // First adoption deliberately runs legacy OTEL + App DB once before the
+    // session-store parser records its max-id barrier. Subsequent scans use
+    // session-store as canonical for CLI/App requests: OTEL keeps only Chat
+    // extension LogRecords, while App DB remains an observe-only baseline.
     let copilotResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    const copilotSourceAllowed = sourceAllowed("copilot");
+    const adoptedCopilotStorePaths = new Set(
+      Object.entries(cursors?.copilotStore?.dbs || {})
+        .filter(([, state]) => state?.adoptedAt)
+        .map(([dbPath]) => dbPath),
+    );
+    const copilotStorePaths = copilotSourceAllowed
+      ? Array.from(
+          new Set([
+            ...resolveCopilotSessionStorePaths(process.env),
+            ...adoptedCopilotStorePaths,
+          ]),
+        ).filter((dbPath) => {
+          if (adoptedCopilotStorePaths.has(dbPath)) return true;
+          try { return fssync.existsSync(dbPath); } catch (_e) { return false; }
+        })
+      : [];
+    const copilotStoreWasActive = cursors?.copilotStore?.active === true;
+    const copilotStoreAdoptionFingerprints = {};
+    if (!copilotStoreWasActive) {
+      for (const dbPath of copilotStorePaths) {
+        try {
+          copilotStoreAdoptionFingerprints[dbPath] =
+            getCopilotSqliteFingerprint(dbPath);
+        } catch (_e) {}
+      }
+    }
+    const copilotHadOtelHistory =
+      (Array.isArray(cursors?.copilot?.seenIds) && cursors.copilot.seenIds.length > 0) ||
+      (cursors?.copilot?.fileOffsets &&
+        Object.keys(cursors.copilot.fileOffsets).length > 0);
+    let copilotLegacyHealthy = true;
+    let copilotStoreResult = {
+      active: copilotStoreWasActive,
+      healthy: false,
+      adoptedThisRun: false,
+      recordsProcessed: 0,
+      eventsAggregated: 0,
+      bucketsQueued: 0,
+    };
+    if (copilotSourceAllowed && copilotStoreWasActive) {
+      if (progress?.enabled) {
+        progress.start(`Parsing Copilot App/CLI ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        copilotStoreResult = await parseCopilotSessionStoreIncremental({
+          dbPaths: copilotStorePaths,
+          cursors,
+          queuePath,
+          env: process.env,
+          otelUsageEvents: cursors?.copilot?.recentUsageEvents,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing Copilot App/CLI ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} events | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+        copilotResult = {
+          recordsProcessed: copilotResult.recordsProcessed + copilotStoreResult.recordsProcessed,
+          eventsAggregated: copilotResult.eventsAggregated + copilotStoreResult.eventsAggregated,
+          bucketsQueued: copilotResult.bucketsQueued + copilotStoreResult.bucketsQueued,
+        };
+      } catch (err) {
+        warnProviderParseFailure("Copilot App/CLI session store", err, opts);
+      }
+    }
+    const copilotStoreOwnsNewUsage =
+      copilotStoreWasActive &&
+      copilotStoreResult.active !== false &&
+      copilotStoreResult.healthy === true &&
+      copilotStoreResult.adoptedThisRun !== true;
+    const copilotLegacyFrozen =
+      copilotStoreWasActive && copilotStoreResult.healthy !== true;
+
+    // ── GitHub Copilot CLI / Chat extension (OTEL JSONL files) ──
     const copilotPaths = sourceAllowed("copilot") ? resolveCopilotOtelPaths(process.env) : [];
-    if (copilotPaths.length > 0) {
+    if (!copilotLegacyFrozen && copilotPaths.length > 0) {
       if (progress?.enabled) {
         progress.start(`Parsing Copilot ${renderBar(0)} | buckets 0`);
       }
       try {
-        copilotResult = await parseCopilotIncremental({
+        const copilotOtelResult = await parseCopilotIncremental({
           otelPaths: copilotPaths,
           cursors,
           queuePath,
           env: process.env,
+          storeUsageEvents: copilotStoreOwnsNewUsage
+            ? cursors?.copilotStore?.recentEvents
+            : [],
           onProgress: (p) => {
             if (!progress?.enabled) return;
             const pct = p.total > 0 ? p.index / p.total : 1;
@@ -1347,18 +1436,38 @@ async function cmdSync(argv) {
             );
           },
         });
+        copilotResult = {
+          recordsProcessed: copilotResult.recordsProcessed + copilotOtelResult.recordsProcessed,
+          eventsAggregated: copilotResult.eventsAggregated + copilotOtelResult.eventsAggregated,
+          bucketsQueued: copilotResult.bucketsQueued + copilotOtelResult.bucketsQueued,
+        };
       } catch (err) {
+        copilotLegacyHealthy = false;
         warnProviderParseFailure("Copilot", err, opts);
       }
     }
 
     // ── GitHub Copilot App (passive data.db session summaries) ──
+    const trackedCopilotAppDbPaths = new Set(
+      Object.keys(cursors?.copilotApp?.dbs || {}),
+    );
+    const missingTrackedCopilotAppDb =
+      Array.from(trackedCopilotAppDbPaths).some((dbPath) => {
+        try { return !fssync.existsSync(dbPath); } catch (_e) { return true; }
+      });
+    if (missingTrackedCopilotAppDb) copilotLegacyHealthy = false;
     const copilotAppDbPaths = sourceAllowed("copilot")
-      ? resolveCopilotAppDbPaths(process.env).filter((p) => {
-          try { return fssync.existsSync(p); } catch (_e) { return false; }
+      ? Array.from(
+          new Set([
+            ...resolveCopilotAppDbPaths(process.env),
+            ...trackedCopilotAppDbPaths,
+          ]),
+        ).filter((dbPath) => {
+          if (trackedCopilotAppDbPaths.has(dbPath)) return true;
+          try { return fssync.existsSync(dbPath); } catch (_e) { return false; }
         })
       : [];
-    if (copilotAppDbPaths.length > 0) {
+    if (!copilotLegacyFrozen && copilotAppDbPaths.length > 0) {
       if (progress?.enabled) {
         progress.start(`Parsing Copilot App ${renderBar(0)} | buckets 0`);
       }
@@ -1368,6 +1477,7 @@ async function cmdSync(argv) {
           cursors,
           queuePath,
           env: process.env,
+          observeOnly: copilotStoreOwnsNewUsage,
           onProgress: (p) => {
             if (!progress?.enabled) return;
             const pct = p.total > 0 ? p.index / p.total : 1;
@@ -1381,8 +1491,67 @@ async function cmdSync(argv) {
           eventsAggregated: copilotResult.eventsAggregated + copilotAppResult.eventsAggregated,
           bucketsQueued: copilotResult.bucketsQueued + copilotAppResult.bucketsQueued,
         };
+        if (copilotAppResult.dbErrors > 0) copilotLegacyHealthy = false;
       } catch (err) {
+        copilotLegacyHealthy = false;
         warnProviderParseFailure("Copilot App", err, opts);
+      }
+    }
+
+    if (
+      copilotStoreWasActive &&
+      copilotStoreResult.adoptedThisRun &&
+      !copilotLegacyFrozen &&
+      copilotStoreResult.healthy === true &&
+      copilotLegacyHealthy &&
+      cursors?.copilotStore
+    ) {
+      finalizeCopilotStoreLegacyCatchup({
+        dbPaths: copilotStorePaths,
+        cursors,
+      });
+    }
+
+    if (
+      copilotSourceAllowed &&
+      !copilotStoreWasActive &&
+      copilotStorePaths.length > 0 &&
+      copilotLegacyHealthy
+    ) {
+      if (progress?.enabled) {
+        progress.start(`Adopting Copilot App/CLI store ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        const appSessionIds = [];
+        for (const dbState of Object.values(cursors?.copilotApp?.dbs || {})) {
+          for (const [sessionId, totals] of Object.entries(
+            dbState?.sessionTotals || {},
+          )) {
+            const total =
+              Number(totals?.input || 0) +
+              Number(totals?.output || 0) +
+              Number(totals?.cached || 0) +
+              Number(totals?.reasoning || 0);
+            if (total > 0) appSessionIds.push(sessionId);
+          }
+        }
+        copilotStoreResult = await parseCopilotSessionStoreIncremental({
+          dbPaths: copilotStorePaths,
+          cursors,
+          queuePath,
+          env: process.env,
+          backfillOnFirstRun: !copilotHadOtelHistory,
+          excludeSessionIdsOnFirstRun: appSessionIds,
+          expectedFingerprints: copilotStoreAdoptionFingerprints,
+          otelUsageEvents: cursors?.copilot?.recentUsageEvents,
+        });
+        copilotResult = {
+          recordsProcessed: copilotResult.recordsProcessed + copilotStoreResult.recordsProcessed,
+          eventsAggregated: copilotResult.eventsAggregated + copilotStoreResult.eventsAggregated,
+          bucketsQueued: copilotResult.bucketsQueued + copilotStoreResult.bucketsQueued,
+        };
+      } catch (err) {
+        warnProviderParseFailure("Copilot App/CLI session store", err, opts);
       }
     }
 

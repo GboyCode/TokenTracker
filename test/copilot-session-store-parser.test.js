@@ -1,0 +1,1566 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const cp = require("node:child_process");
+
+const { mockPlatform, mockMethod } = require("./helpers/mock");
+const { cmdSync } = require("../src/commands/sync");
+const wsl = require("../src/lib/wsl-probe");
+const {
+  finalizeCopilotStoreLegacyCatchup,
+  getCopilotSqliteFingerprint,
+  normalizeCopilotSessionStoreUsage,
+  parseCopilotAppDbIncremental,
+  parseCopilotIncremental,
+  parseCopilotSessionStoreIncremental,
+  resolveCopilotAppDbPaths,
+  resolveCopilotSessionStorePaths,
+} = require("../src/lib/rollout");
+
+function sqlValue(value) {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "number") return String(value);
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function runSql(dbPath, sql) {
+  cp.execFileSync("sqlite3", [dbPath, sql], { stdio: ["ignore", "ignore", "pipe"] });
+}
+
+function makeStoreDb(rows = []) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-store-test-"));
+  const copilotHome = path.join(dir, ".copilot");
+  fs.mkdirSync(copilotHome, { recursive: true });
+  const dbPath = path.join(copilotHome, "session-store.db");
+  runSql(dbPath, `
+    CREATE TABLE schema_version (version INTEGER NOT NULL);
+    INSERT INTO schema_version (version) VALUES (6);
+    CREATE TABLE assistant_usage_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_read_tokens INTEGER,
+      cache_write_tokens INTEGER,
+      reasoning_tokens INTEGER,
+      token_details_json TEXT,
+      created_at TEXT
+    );
+  `);
+  for (const row of rows) insertUsage(dbPath, row);
+  return { dir, copilotHome, dbPath };
+}
+
+function makeAppDb(copilotHome, row) {
+  const dbPath = path.join(copilotHome, "data.db");
+  runSql(dbPath, `
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      session_type TEXT,
+      model TEXT,
+      provider_id TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      total_input_tokens INTEGER,
+      total_output_tokens INTEGER,
+      total_cached_tokens INTEGER,
+      total_reasoning_tokens INTEGER
+    );
+    INSERT INTO sessions (
+      id, session_type, model, provider_id, created_at, updated_at,
+      total_input_tokens, total_output_tokens, total_cached_tokens,
+      total_reasoning_tokens
+    ) VALUES (
+      ${sqlValue(row.id)}, 'project', ${sqlValue(row.model)}, NULL,
+      ${sqlValue(row.created_at)}, ${sqlValue(row.updated_at)},
+      ${sqlValue(row.total_input_tokens)}, ${sqlValue(row.total_output_tokens)},
+      ${sqlValue(row.total_cached_tokens)}, ${sqlValue(row.total_reasoning_tokens)}
+    );
+  `);
+  return dbPath;
+}
+
+function updateAppUsage(dbPath, id, values) {
+  const setSql = Object.entries(values)
+    .map(([column, value]) => `${column}=${sqlValue(value)}`)
+    .join(", ");
+  runSql(dbPath, `UPDATE sessions SET ${setSql} WHERE id=${sqlValue(id)};`);
+  const future = new Date(Date.now() + 2000);
+  fs.utimesSync(dbPath, future, future);
+}
+
+function insertUsage(dbPath, row) {
+  const columns = [
+    "id",
+    "session_id",
+    "model",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+    "token_details_json",
+    "created_at",
+  ];
+  const values = columns.map((column) => sqlValue(row[column]));
+  runSql(
+    dbPath,
+    `INSERT INTO assistant_usage_events (${columns.join(", ")}) VALUES (${values.join(", ")});`,
+  );
+}
+
+function tokenDetails({ input = 0, cacheRead = 0, cacheWrite = 0, output = 0 }) {
+  return JSON.stringify([
+    { tokenType: "input", tokenCount: input, batchSize: 1_000_000, costPerBatch: 1 },
+    { tokenType: "cache_read", tokenCount: cacheRead, batchSize: 1_000_000, costPerBatch: 1 },
+    { tokenType: "cache_write", tokenCount: cacheWrite, batchSize: 1_000_000, costPerBatch: 1 },
+    { tokenType: "output", tokenCount: output, batchSize: 1_000_000, costPerBatch: 1 },
+  ]);
+}
+
+function readQueue(queuePath) {
+  if (!fs.existsSync(queuePath)) return [];
+  return fs
+    .readFileSync(queuePath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map(JSON.parse);
+}
+
+async function withSyncHome(home, fn) {
+  const keys = [
+    "HOME",
+    "USERPROFILE",
+    "TOKENTRACKER_DEVICE_TOKEN",
+    "TOKENTRACKER_INSFORGE_BASE_URL",
+    "COPILOT_HOME",
+    "COPILOT_OTEL_ENABLED",
+    "COPILOT_OTEL_EXPORTER_TYPE",
+    "COPILOT_OTEL_FILE_EXPORTER_PATH",
+    "TOKENTRACKER_COPILOT_APP_DB",
+    "TOKENTRACKER_COPILOT_SESSION_STORE_DB",
+  ];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    for (const key of keys.slice(2)) delete process.env[key];
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+function makeCliSpan({
+  sessionId = "session-cli",
+  model = "gpt-cli",
+  input = 100,
+  output = 20,
+  cacheRead = 0,
+  cacheWrite = 0,
+  seconds = 1780000000,
+  traceId = "trace-cli",
+  spanId = "span-cli",
+} = {}) {
+  return {
+    type: "span",
+    traceId,
+    spanId,
+    name: `chat ${model}`,
+    startTime: [seconds - 1, 0],
+    endTime: [seconds, 0],
+    attributes: {
+      "gen_ai.operation.name": "chat",
+      "gen_ai.conversation.id": sessionId,
+      "gen_ai.response.model": model,
+      "gen_ai.usage.input_tokens": input,
+      "gen_ai.usage.output_tokens": output,
+      ...(cacheRead > 0
+        ? { "gen_ai.usage.cache_read.input_tokens": cacheRead }
+        : {}),
+      ...(cacheWrite > 0
+        ? { "gen_ai.usage.cache_write.input_tokens": cacheWrite }
+        : {}),
+    },
+  };
+}
+
+function makeChatLogRecord({
+  model = "gpt-chat",
+  input = 80,
+  output = 10,
+  seconds = 1780000010,
+} = {}) {
+  return {
+    hrTime: [seconds, 0],
+    attributes: {
+      "gen_ai.operation.name": "chat",
+      "gen_ai.response.id": "response-chat",
+      "gen_ai.response.model": model,
+      "gen_ai.usage.input_tokens": input,
+      "gen_ai.usage.output_tokens": output,
+    },
+  };
+}
+
+test("normalizeCopilotSessionStoreUsage uses token details to split cache writes", () => {
+  const normalized = normalizeCopilotSessionStoreUsage({
+    input_tokens: 125,
+    output_tokens: 7,
+    cache_read_tokens: 20,
+    cache_write_tokens: 0,
+    reasoning_tokens: 3,
+    token_details_json: tokenDetails({
+      input: 5,
+      cacheRead: 20,
+      cacheWrite: 100,
+      output: 7,
+    }),
+  });
+  assert.deepEqual(normalized, {
+    input_tokens: 5,
+    cached_input_tokens: 20,
+    cache_creation_input_tokens: 100,
+    output_tokens: 4,
+    reasoning_output_tokens: 3,
+    total_tokens: 132,
+    precision: "exact",
+  });
+});
+
+test("normalizeCopilotSessionStoreUsage falls back to top-level usage", () => {
+  const normalized = normalizeCopilotSessionStoreUsage({
+    input_tokens: 100,
+    output_tokens: 10,
+    cache_read_tokens: 30,
+    cache_write_tokens: 20,
+    reasoning_tokens: 2,
+    token_details_json: "{bad json",
+  });
+  assert.equal(normalized.input_tokens, 50);
+  assert.equal(normalized.cached_input_tokens, 30);
+  assert.equal(normalized.cache_creation_input_tokens, 20);
+  assert.equal(normalized.output_tokens, 8);
+  assert.equal(normalized.reasoning_output_tokens, 2);
+  assert.equal(normalized.total_tokens, 110);
+  assert.equal(normalized.precision, "fallback");
+});
+
+test("session store adopts existing rows, then emits only new App/CLI requests", async () => {
+  const { dir, dbPath } = makeStoreDb([
+    {
+      id: 1,
+      session_id: "existing-session",
+      model: "gpt-5.6-luna",
+      input_tokens: 50,
+      output_tokens: 2,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      token_details_json: tokenDetails({ input: 5, cacheWrite: 45, output: 2 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+  ]);
+  try {
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursors = {};
+    const adopted = await parseCopilotSessionStoreIncremental({
+      dbPath,
+      cursors,
+      queuePath,
+    });
+    assert.equal(adopted.active, true);
+    assert.equal(adopted.adoptedThisRun, true);
+    assert.equal(adopted.eventsAggregated, 0);
+    assert.equal(cursors.copilotStore.dbs[dbPath].lastId, 1);
+    assert.deepEqual(readQueue(queuePath), []);
+
+    insertUsage(dbPath, {
+      id: 2,
+      session_id: "existing-session",
+      model: "gpt-5.6-luna",
+      input_tokens: 125,
+      output_tokens: 7,
+      cache_read_tokens: 20,
+      cache_write_tokens: 0,
+      reasoning_tokens: 3,
+      token_details_json: tokenDetails({
+        input: 5,
+        cacheRead: 20,
+        cacheWrite: 100,
+        output: 7,
+      }),
+      created_at: "2026-07-10T10:30:05Z",
+    });
+    const incremental = await parseCopilotSessionStoreIncremental({
+      dbPath,
+      cursors,
+      queuePath,
+    });
+    assert.equal(incremental.adoptedThisRun, false);
+    assert.equal(incremental.eventsAggregated, 1);
+    const rows = readQueue(queuePath);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].model, "gpt-5.6-luna");
+    assert.equal(rows[0].input_tokens, 5);
+    assert.equal(rows[0].cached_input_tokens, 20);
+    assert.equal(rows[0].cache_creation_input_tokens, 100);
+    assert.equal(rows[0].output_tokens, 4);
+    assert.equal(rows[0].reasoning_output_tokens, 3);
+    assert.equal(rows[0].total_tokens, 132);
+    assert.equal(rows[0].conversation_count, 0);
+
+    const second = await parseCopilotSessionStoreIncremental({
+      dbPath,
+      cursors,
+      queuePath,
+    });
+    assert.equal(second.eventsAggregated, 0);
+    assert.equal(readQueue(queuePath).length, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("session store can backfill a fresh install with per-model precision", async () => {
+  const { dir, dbPath } = makeStoreDb([
+    {
+      id: 1,
+      session_id: "fresh-session",
+      model: "claude-opus-4.8",
+      input_tokens: 30,
+      output_tokens: 4,
+      cache_read_tokens: 10,
+      cache_write_tokens: 0,
+      reasoning_tokens: 2,
+      token_details_json: tokenDetails({
+        input: 5,
+        cacheRead: 10,
+        cacheWrite: 15,
+        output: 4,
+      }),
+      created_at: "2026-07-10T11:00:00Z",
+    },
+  ]);
+  try {
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursors = {};
+    const result = await parseCopilotSessionStoreIncremental({
+      dbPath,
+      cursors,
+      queuePath,
+      backfillOnFirstRun: true,
+    });
+    assert.equal(result.eventsAggregated, 1);
+    const [row] = readQueue(queuePath);
+    assert.equal(row.model, "claude-opus-4-8");
+    assert.equal(row.conversation_count, 1);
+    assert.equal(row.input_tokens, 5);
+    assert.equal(row.cached_input_tokens, 10);
+    assert.equal(row.cache_creation_input_tokens, 15);
+    assert.equal(row.output_tokens, 2);
+    assert.equal(row.reasoning_output_tokens, 2);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("session store re-adopts a recreated database without replaying IDs", async () => {
+  const { dir, dbPath } = makeStoreDb([
+    {
+      id: 5,
+      session_id: "old-db-session",
+      model: "gpt-5.6-luna",
+      input_tokens: 10,
+      output_tokens: 1,
+      token_details_json: tokenDetails({ input: 10, output: 1 }),
+      created_at: "2026-07-10T12:00:00Z",
+    },
+  ]);
+  try {
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursors = {};
+    await parseCopilotSessionStoreIncremental({ dbPath, cursors, queuePath });
+    fs.rmSync(dbPath, { force: true });
+    runSql(dbPath, `
+      CREATE TABLE schema_version (version INTEGER NOT NULL);
+      INSERT INTO schema_version (version) VALUES (6);
+      CREATE TABLE assistant_usage_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        cache_read_tokens INTEGER,
+        cache_write_tokens INTEGER,
+        reasoning_tokens INTEGER,
+        token_details_json TEXT,
+        created_at TEXT
+      );
+    `);
+    insertUsage(dbPath, {
+      id: 1,
+      session_id: "new-db-session",
+      model: "gpt-5.6-terra",
+      input_tokens: 20,
+      output_tokens: 2,
+      token_details_json: tokenDetails({ input: 20, output: 2 }),
+      created_at: "2026-07-10T12:30:00Z",
+    });
+    const result = await parseCopilotSessionStoreIncremental({
+      dbPath,
+      cursors,
+      queuePath,
+    });
+    assert.equal(result.adoptedThisRun, true);
+    assert.equal(result.eventsAggregated, 0);
+    assert.equal(cursors.copilotStore.dbs[dbPath].lastId, 5);
+    assert.equal(cursors.copilotStore.dbs[dbPath].pendingCatchupMaxId, 1);
+    assert.equal(cursors.copilotStore.pendingLegacyCatchup, true);
+    assert.deepEqual(readQueue(queuePath), []);
+
+    insertUsage(dbPath, {
+      id: 2,
+      session_id: "written-during-legacy-catchup",
+      model: "gpt-5.6-luna",
+      input_tokens: 5,
+      output_tokens: 1,
+      token_details_json: tokenDetails({ input: 5, output: 1 }),
+      created_at: "2026-07-10T12:31:00Z",
+    });
+    assert.equal(
+      finalizeCopilotStoreLegacyCatchup({ dbPaths: [dbPath], cursors }),
+      false,
+    );
+    assert.equal(cursors.copilotStore.pendingLegacyCatchup, true);
+
+    const pendingRetry = await parseCopilotSessionStoreIncremental({
+      dbPath,
+      cursors,
+      queuePath,
+    });
+    assert.equal(pendingRetry.eventsAggregated, 0);
+    assert.equal(cursors.copilotStore.dbs[dbPath].pendingCatchupMaxId, 2);
+    assert.equal(
+      finalizeCopilotStoreLegacyCatchup({ dbPaths: [dbPath], cursors }),
+      true,
+    );
+    assert.equal(cursors.copilotStore.pendingLegacyCatchup, false);
+    assert.equal(cursors.copilotStore.dbs[dbPath].lastId, 2);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("session store does not activate canonical ownership when one discovered DB fails", async () => {
+  const { dir, dbPath } = makeStoreDb([
+    {
+      id: 1,
+      session_id: "healthy-session",
+      model: "gpt-5.6-luna",
+      input_tokens: 10,
+      output_tokens: 1,
+      token_details_json: tokenDetails({ input: 10, output: 1 }),
+      created_at: "2026-07-10T12:00:00Z",
+    },
+  ]);
+  const badDbPath = path.join(dir, ".copilot", "broken-session-store.db");
+  fs.writeFileSync(badDbPath, "not sqlite", "utf8");
+  try {
+    const cursors = {};
+    const result = await parseCopilotSessionStoreIncremental({
+      dbPaths: [dbPath, badDbPath],
+      cursors,
+      queuePath: path.join(dir, "queue.jsonl"),
+    });
+    assert.equal(result.active, false);
+    assert.equal(result.dbErrors, 1);
+    assert.equal(result.eventsAggregated, 0);
+    assert.notEqual(cursors.copilotStore.active, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("first adoption is deferred when the store changes after legacy snapshot", async () => {
+  const { dir, dbPath } = makeStoreDb([
+    {
+      id: 1,
+      session_id: "stable-cutoff-session",
+      model: "gpt-5.6-luna",
+      input_tokens: 10,
+      output_tokens: 1,
+      token_details_json: tokenDetails({ input: 10, output: 1 }),
+      created_at: "2026-07-10T12:00:00Z",
+    },
+  ]);
+  try {
+    const expected = getCopilotSqliteFingerprint(dbPath);
+    insertUsage(dbPath, {
+      id: 2,
+      session_id: "written-during-catchup",
+      model: "gpt-5.6-terra",
+      input_tokens: 20,
+      output_tokens: 2,
+      token_details_json: tokenDetails({ input: 20, output: 2 }),
+      created_at: "2026-07-10T12:00:01Z",
+    });
+    const cursors = {};
+    const result = await parseCopilotSessionStoreIncremental({
+      dbPath,
+      cursors,
+      queuePath: path.join(dir, "queue.jsonl"),
+      expectedFingerprints: { [dbPath]: expected },
+    });
+    assert.equal(result.active, false);
+    assert.equal(result.eventsAggregated, 0);
+    assert.notEqual(cursors.copilotStore.active, true);
+    assert.equal(cursors.copilotStore.dbs[dbPath].adoptedAt, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("App -> CLI -> App switching emits each post-adoption request once", async () => {
+  const sessionId = "switching-session";
+  const { dir, copilotHome, dbPath: storeDb } = makeStoreDb([
+    {
+      id: 1,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 50,
+      output_tokens: 2,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      token_details_json: tokenDetails({ input: 5, cacheWrite: 45, output: 2 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+  ]);
+  const appDb = makeAppDb(copilotHome, {
+    id: sessionId,
+    model: "gpt-5.6-luna",
+    created_at: "2026-07-10T10:00:00Z",
+    updated_at: "2026-07-10T10:00:00Z",
+    total_input_tokens: 50,
+    total_output_tokens: 2,
+    total_cached_tokens: 0,
+    total_reasoning_tokens: 0,
+  });
+  try {
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursors = {};
+
+    const legacyApp = await parseCopilotAppDbIncremental({
+      dbPath: appDb,
+      cursors,
+      queuePath,
+    });
+    const adoption = await parseCopilotSessionStoreIncremental({
+      dbPath: storeDb,
+      cursors,
+      queuePath,
+    });
+    assert.equal(legacyApp.eventsAggregated, 1);
+    assert.equal(adoption.eventsAggregated, 0);
+
+    insertUsage(storeDb, {
+      id: 2,
+      session_id: sessionId,
+      model: "gpt-5.6-terra",
+      input_tokens: 30,
+      output_tokens: 3,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      token_details_json: tokenDetails({ input: 3, cacheWrite: 27, output: 3 }),
+      created_at: "2026-07-10T10:30:00Z",
+    });
+    const cliContinuation = await parseCopilotSessionStoreIncremental({
+      dbPath: storeDb,
+      cursors,
+      queuePath,
+    });
+    const unchangedApp = await parseCopilotAppDbIncremental({
+      dbPath: appDb,
+      cursors,
+      queuePath,
+      observeOnly: true,
+    });
+    assert.equal(cliContinuation.eventsAggregated, 1);
+    assert.equal(unchangedApp.eventsAggregated, 0);
+
+    insertUsage(storeDb, {
+      id: 3,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 40,
+      output_tokens: 4,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      token_details_json: tokenDetails({ input: 4, cacheWrite: 36, output: 4 }),
+      created_at: "2026-07-10T11:00:00Z",
+    });
+    updateAppUsage(appDb, sessionId, {
+      updated_at: "2026-07-10T11:00:00Z",
+      total_input_tokens: 90,
+      total_output_tokens: 6,
+    });
+    const appContinuation = await parseCopilotSessionStoreIncremental({
+      dbPath: storeDb,
+      cursors,
+      queuePath,
+    });
+    const observedApp = await parseCopilotAppDbIncremental({
+      dbPath: appDb,
+      cursors,
+      queuePath,
+      observeOnly: true,
+    });
+    assert.equal(appContinuation.eventsAggregated, 1);
+    assert.equal(observedApp.eventsAggregated, 0);
+
+    const rows = readQueue(queuePath);
+    assert.equal(rows.length, 3);
+    assert.equal(
+      rows.reduce((sum, row) => sum + row.total_tokens, 0),
+      52 + 33 + 44,
+    );
+    assert.equal(
+      rows.reduce((sum, row) => sum + row.conversation_count, 0),
+      1,
+    );
+    const byModel = rows.reduce((map, row) => {
+      map.set(row.model, (map.get(row.model) || 0) + row.total_tokens);
+      return map;
+    }, new Map());
+    assert.equal(byModel.get("gpt-5.6-luna"), 52 + 44);
+    assert.equal(byModel.get("gpt-5.6-terra"), 33);
+
+    const finalStore = await parseCopilotSessionStoreIncremental({
+      dbPath: storeDb,
+      cursors,
+      queuePath,
+    });
+    const finalApp = await parseCopilotAppDbIncremental({
+      dbPath: appDb,
+      cursors,
+      queuePath,
+      observeOnly: true,
+    });
+    assert.equal(finalStore.eventsAggregated, 0);
+    assert.equal(finalApp.eventsAggregated, 0);
+    assert.equal(readQueue(queuePath).length, 3);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI -> App -> CLI switching keeps App DB from replaying the App segment", async () => {
+  const sessionId = "imported-cli-session";
+  const { dir, copilotHome, dbPath: storeDb } = makeStoreDb([
+    {
+      id: 1,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 20,
+      output_tokens: 2,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      token_details_json: tokenDetails({ input: 2, cacheWrite: 18, output: 2 }),
+      created_at: "2026-07-10T09:00:00Z",
+    },
+  ]);
+  const appDb = makeAppDb(copilotHome, {
+    id: sessionId,
+    model: null,
+    created_at: "2026-07-10T09:00:00Z",
+    updated_at: "2026-07-10T09:10:00Z",
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    total_cached_tokens: 0,
+    total_reasoning_tokens: 0,
+  });
+  try {
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursors = {};
+    await parseCopilotAppDbIncremental({ dbPath: appDb, cursors, queuePath });
+    await parseCopilotSessionStoreIncremental({ dbPath: storeDb, cursors, queuePath });
+    assert.deepEqual(readQueue(queuePath), []);
+
+    insertUsage(storeDb, {
+      id: 2,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 30,
+      output_tokens: 3,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 1,
+      token_details_json: tokenDetails({ input: 3, cacheWrite: 27, output: 3 }),
+      created_at: "2026-07-10T09:30:00Z",
+    });
+    updateAppUsage(appDb, sessionId, {
+      updated_at: "2026-07-10T09:30:00Z",
+      total_input_tokens: 30,
+      total_output_tokens: 3,
+      total_reasoning_tokens: 1,
+    });
+    await parseCopilotSessionStoreIncremental({ dbPath: storeDb, cursors, queuePath });
+    const observed = await parseCopilotAppDbIncremental({
+      dbPath: appDb,
+      cursors,
+      queuePath,
+      observeOnly: true,
+    });
+    assert.equal(observed.eventsAggregated, 0);
+
+    insertUsage(storeDb, {
+      id: 3,
+      session_id: sessionId,
+      model: "gpt-5.6-terra",
+      input_tokens: 25,
+      output_tokens: 4,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      token_details_json: tokenDetails({ input: 4, cacheWrite: 21, output: 4 }),
+      created_at: "2026-07-10T10:00:00Z",
+    });
+    await parseCopilotSessionStoreIncremental({ dbPath: storeDb, cursors, queuePath });
+    const rows = readQueue(queuePath);
+    assert.equal(rows.length, 2);
+    assert.equal(rows.reduce((sum, row) => sum + row.total_tokens, 0), 33 + 29);
+    assert.equal(rows.reduce((sum, row) => sum + row.conversation_count, 0), 0);
+    assert.equal(cursors.copilotApp.dbs[appDb].sessionTotals[sessionId].input, 30);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("canonical store mode skips CLI OTEL spans but keeps Chat extension records", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-otel-owner-test-"));
+  try {
+    const otelPath = path.join(dir, "copilot.jsonl");
+    fs.writeFileSync(
+      otelPath,
+      [makeCliSpan(), makeChatLogRecord()].map(JSON.stringify).join("\n") + "\n",
+      "utf8",
+    );
+    const queuePath = path.join(dir, "queue.jsonl");
+    const result = await parseCopilotIncremental({
+      otelPaths: [otelPath],
+      cursors: {},
+      queuePath,
+      skipCliSpans: true,
+    });
+    assert.equal(result.eventsAggregated, 1);
+    const [row] = readQueue(queuePath);
+    assert.equal(row.model, "gpt-chat");
+    assert.equal(row.input_tokens, 80);
+    assert.equal(row.output_tokens, 10);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI OTEL splits cache writes and normalizes dotted Claude model IDs", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-otel-cache-test-"));
+  try {
+    const otelPath = path.join(dir, "copilot.jsonl");
+    fs.writeFileSync(
+      otelPath,
+      JSON.stringify(
+        makeCliSpan({
+          sessionId: "cache-write-cli",
+          model: "claude-opus-4.8",
+          input: 125,
+          output: 7,
+          cacheRead: 20,
+          cacheWrite: 100,
+        }),
+      ) + "\n",
+      "utf8",
+    );
+    const queuePath = path.join(dir, "queue.jsonl");
+    await parseCopilotIncremental({
+      otelPaths: [otelPath],
+      cursors: {},
+      queuePath,
+    });
+    const [row] = readQueue(queuePath);
+    assert.equal(row.model, "claude-opus-4-8");
+    assert.equal(row.input_tokens, 5);
+    assert.equal(row.cached_input_tokens, 20);
+    assert.equal(row.cache_creation_input_tokens, 100);
+    assert.equal(row.output_tokens, 7);
+    assert.equal(row.total_tokens, 132);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("store usage matcher skips only overlapping CLI OTEL requests", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-otel-match-test-"));
+  try {
+    const otelPath = path.join(dir, "copilot.jsonl");
+    fs.writeFileSync(
+      otelPath,
+      [
+        makeCliSpan({
+          sessionId: "matched-session",
+          model: "gpt-5.6-luna",
+          input: 100,
+          output: 20,
+          seconds: 1780000000,
+          traceId: "trace-matched",
+          spanId: "span-matched",
+        }),
+        makeCliSpan({
+          sessionId: "legacy-session",
+          model: "gpt-4o",
+          input: 80,
+          output: 10,
+          seconds: 1780000010,
+          traceId: "trace-legacy",
+          spanId: "span-legacy",
+        }),
+        makeCliSpan({
+          sessionId: "cache-write-session",
+          model: "gpt-5.6-luna",
+          input: 125,
+          output: 7,
+          cacheRead: 20,
+          cacheWrite: 100,
+          seconds: 1780000015,
+          traceId: "trace-cache-write",
+          spanId: "span-cache-write",
+        }),
+        makeChatLogRecord({ model: "gpt-chat", seconds: 1780000020 }),
+      ].map(JSON.stringify).join("\n") + "\n",
+      "utf8",
+    );
+    const queuePath = path.join(dir, "queue.jsonl");
+    const result = await parseCopilotIncremental({
+      otelPaths: [otelPath],
+      cursors: {},
+      queuePath,
+      storeUsageEvents: [
+        {
+          sessionId: "matched-session",
+          model: "gpt-5.6-luna",
+          input: 100,
+          output: 20,
+          cacheRead: 0,
+          cacheWrite: 0,
+          reasoning: 0,
+          tsMs: 1780000000030,
+        },
+        {
+          sessionId: "cache-write-session",
+          model: "gpt-5.6-luna",
+          input: 5,
+          output: 7,
+          cacheRead: 20,
+          cacheWrite: 100,
+          reasoning: 0,
+          tsMs: 1780000015030,
+        },
+      ],
+    });
+    assert.equal(result.eventsAggregated, 2);
+    const rows = readQueue(queuePath);
+    assert.deepEqual(
+      rows.map((row) => row.model).sort(),
+      ["gpt-4o", "gpt-chat"],
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a delayed store row consumes an OTEL request counted on the previous sync", async () => {
+  const { dir, dbPath } = makeStoreDb([]);
+  try {
+    const sessionId = "delayed-store-session";
+    const seconds = 1780000000;
+    const otelPath = path.join(dir, "copilot-delayed.jsonl");
+    fs.writeFileSync(
+      otelPath,
+      JSON.stringify(
+        makeCliSpan({
+          sessionId,
+          model: "gpt-5.6-luna",
+          input: 100,
+          output: 20,
+          seconds,
+        }),
+      ) + "\n",
+      "utf8",
+    );
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursors = {};
+    const otel = await parseCopilotIncremental({
+      otelPaths: [otelPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(otel.eventsAggregated, 1);
+    assert.equal(cursors.copilot.recentUsageEvents.length, 1);
+
+    insertUsage(dbPath, {
+      id: 1,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 100,
+      output_tokens: 20,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      token_details_json: tokenDetails({ input: 100, output: 20 }),
+      created_at: new Date(seconds * 1000 + 30).toISOString(),
+    });
+    const store = await parseCopilotSessionStoreIncremental({
+      dbPath,
+      cursors,
+      queuePath,
+      backfillOnFirstRun: true,
+      otelUsageEvents: cursors.copilot.recentUsageEvents,
+    });
+    assert.equal(store.eventsAggregated, 0);
+    assert.equal(cursors.copilotStore.dbs[dbPath].lastId, 1);
+    assert.equal(readQueue(queuePath).length, 1);
+    assert.equal(cursors.copilot.recentUsageEvents[0].consumed, true);
+
+    insertUsage(dbPath, {
+      id: 2,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 100,
+      output_tokens: 20,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      token_details_json: tokenDetails({ input: 100, output: 20 }),
+      created_at: new Date(seconds * 1000 + 30).toISOString(),
+    });
+    const distinctStoreRequest = await parseCopilotSessionStoreIncremental({
+      dbPath,
+      cursors,
+      queuePath,
+      otelUsageEvents: cursors.copilot.recentUsageEvents,
+    });
+    assert.equal(distinctStoreRequest.eventsAggregated, 1);
+    assert.equal(cursors.copilotStore.dbs[dbPath].lastId, 2);
+    assert.equal(readQueue(queuePath).length, 2);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveCopilotSessionStorePaths includes custom and default homes", () => {
+  const paths = resolveCopilotSessionStorePaths({
+    HOME: "/tmp/copilot-store-home",
+    COPILOT_HOME: "/tmp/copilot-store-custom",
+  });
+  assert.ok(paths.includes(path.join("/tmp/copilot-store-home", ".copilot", "session-store.db")));
+  assert.ok(paths.includes(path.join("/tmp/copilot-store-custom", "session-store.db")));
+});
+
+test("resolveCopilotSessionStorePaths keeps Windows native discovery enabled", (t) => {
+  mockPlatform(t, "win32");
+  mockMethod(t, cp, "execFileSync", () => {
+    throw new Error("no WSL distros");
+  });
+  const paths = resolveCopilotSessionStorePaths({
+    HOME: "C:\\Users\\dev",
+    TOKENTRACKER_WSL_MODE: "native-only",
+  });
+  assert.equal(paths.length, 1);
+  assert.match(paths[0], /\.copilot[\\/]session-store\.db$/);
+});
+
+test("missing WSL Copilot databases fall back to native Windows files", (t) => {
+  mockPlatform(t, "win32");
+  mockMethod(
+    t,
+    wsl,
+    "discoverWslHome",
+    () => "\\\\wsl$\\Ubuntu\\home\\dev\\.copilot",
+  );
+  mockMethod(t, fs, "existsSync", (candidate) => {
+    const value = String(candidate);
+    return (
+      value.includes("C:\\Users\\dev") &&
+      (value.endsWith("session-store.db") || value.endsWith("data.db"))
+    );
+  });
+  const env = {
+    HOME: "C:\\Users\\dev",
+    TOKENTRACKER_WSL_MODE: "wsl-first",
+  };
+  const storePaths = resolveCopilotSessionStorePaths(env);
+  const appPaths = resolveCopilotAppDbPaths(env);
+  assert.equal(storePaths.length, 1);
+  assert.equal(appPaths.length, 1);
+  assert.match(storePaths[0], /C:\\Users\\dev/);
+  assert.match(appPaths[0], /C:\\Users\\dev/);
+});
+
+test("cmdSync catches up App once, adopts store, then writes only store deltas", async () => {
+  const sessionId = "sync-switching-session";
+  const { dir, copilotHome, dbPath: storeDb } = makeStoreDb([
+    {
+      id: 1,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 50,
+      output_tokens: 2,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      token_details_json: tokenDetails({ input: 5, cacheWrite: 45, output: 2 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+    {
+      id: 2,
+      session_id: "cli-only-before-adoption",
+      model: "gpt-5.6-terra",
+      input_tokens: 10,
+      output_tokens: 1,
+      token_details_json: tokenDetails({ input: 1, cacheWrite: 9, output: 1 }),
+      created_at: "2026-07-10T09:30:00Z",
+    },
+  ]);
+  const appDb = makeAppDb(copilotHome, {
+    id: sessionId,
+    model: "gpt-5.6-luna",
+    created_at: "2026-07-10T10:00:00Z",
+    updated_at: "2026-07-10T10:00:00Z",
+    total_input_tokens: 50,
+    total_output_tokens: 2,
+    total_cached_tokens: 0,
+    total_reasoning_tokens: 0,
+  });
+  try {
+    await withSyncHome(dir, async () => {
+      const args = ["--auto", "--from-retry", "--source=copilot"];
+      await cmdSync(args);
+      const trackerDir = path.join(dir, ".tokentracker", "tracker");
+      const queuePath = path.join(trackerDir, "queue.jsonl");
+      const cursorsPath = path.join(trackerDir, "cursors.json");
+      const firstRows = readQueue(queuePath).filter((row) => row.source === "copilot");
+      assert.equal(firstRows.length, 2);
+      assert.equal(firstRows.reduce((sum, row) => sum + row.total_tokens, 0), 52 + 11);
+      let cursors = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.equal(cursors.copilotStore.active, true);
+      assert.equal(cursors.copilotStore.dbs[storeDb].lastId, 2);
+
+      insertUsage(storeDb, {
+        id: 3,
+        session_id: sessionId,
+        model: "gpt-5.6-terra",
+        input_tokens: 30,
+        output_tokens: 3,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        reasoning_tokens: 0,
+        token_details_json: tokenDetails({ input: 3, cacheWrite: 27, output: 3 }),
+        created_at: "2026-07-10T10:30:00Z",
+      });
+      updateAppUsage(appDb, sessionId, {
+        updated_at: "2026-07-10T10:30:00Z",
+        total_input_tokens: 80,
+        total_output_tokens: 5,
+      });
+      await cmdSync(args);
+      const secondRows = readQueue(queuePath).filter((row) => row.source === "copilot");
+      assert.equal(secondRows.length, 3);
+      assert.equal(
+        secondRows.reduce((sum, row) => sum + row.total_tokens, 0),
+        52 + 11 + 33,
+      );
+      assert.equal(secondRows.filter((row) => row.model === "gpt-5.6-terra").length, 2);
+
+      const beforeThird = fs.readFileSync(queuePath, "utf8");
+      await cmdSync(args);
+      assert.equal(fs.readFileSync(queuePath, "utf8"), beforeThird);
+      cursors = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.equal(cursors.copilotStore.dbs[storeDb].lastId, 3);
+      assert.equal(
+        cursors.copilotApp.dbs[appDb].sessionTotals[sessionId].input,
+        80,
+      );
+
+      insertUsage(storeDb, {
+        id: 4,
+        session_id: sessionId,
+        model: "gpt-5.6-luna",
+        input_tokens: 20,
+        output_tokens: 2,
+        token_details_json: tokenDetails({ input: 2, cacheWrite: 18, output: 2 }),
+        created_at: "2026-07-10T11:00:00Z",
+      });
+      await cmdSync(["--auto", "--from-retry", "--source=codex"]);
+      assert.equal(fs.readFileSync(queuePath, "utf8"), beforeThird);
+      cursors = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.equal(cursors.copilotStore.dbs[storeDb].lastId, 3);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cmdSync does not adopt store when the legacy App catch-up fails", async () => {
+  const { dir, copilotHome } = makeStoreDb([
+    {
+      id: 1,
+      session_id: "pending-adoption",
+      model: "gpt-5.6-luna",
+      input_tokens: 10,
+      output_tokens: 1,
+      token_details_json: tokenDetails({ input: 10, output: 1 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+  ]);
+  fs.writeFileSync(path.join(copilotHome, "data.db"), "not sqlite", "utf8");
+  try {
+    await withSyncHome(dir, async () => {
+      await cmdSync(["--auto", "--from-retry", "--source=copilot"]);
+      const cursors = JSON.parse(
+        fs.readFileSync(path.join(dir, ".tokentracker", "tracker", "cursors.json"), "utf8"),
+      );
+      assert.notEqual(cursors.copilotStore?.active, true);
+      assert.equal(cursors.copilotStore, undefined);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cmdSync backfills store history when no legacy App or OTEL source exists", async () => {
+  const { dir, dbPath } = makeStoreDb([
+    {
+      id: 1,
+      session_id: "cli-only-fresh-install",
+      model: "gpt-5.6-luna",
+      input_tokens: 25,
+      output_tokens: 3,
+      token_details_json: tokenDetails({ input: 2, cacheWrite: 23, output: 3 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+  ]);
+  try {
+    await withSyncHome(dir, async () => {
+      await cmdSync(["--auto", "--from-retry", "--source=copilot"]);
+      const trackerDir = path.join(dir, ".tokentracker", "tracker");
+      const rows = readQueue(path.join(trackerDir, "queue.jsonl"));
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].input_tokens, 2);
+      assert.equal(rows[0].cache_creation_input_tokens, 23);
+      assert.equal(rows[0].output_tokens, 3);
+      const cursors = JSON.parse(
+        fs.readFileSync(path.join(trackerDir, "cursors.json"), "utf8"),
+      );
+      assert.equal(cursors.copilotStore.active, true);
+      assert.equal(cursors.copilotStore.dbs[dbPath].lastId, 1);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a current Chat-only OTEL file does not suppress CLI store backfill", async () => {
+  const { dir } = makeStoreDb([
+    {
+      id: 1,
+      session_id: "cli-history-with-chat-otel",
+      model: "gpt-5.6-luna",
+      input_tokens: 25,
+      output_tokens: 3,
+      token_details_json: tokenDetails({ input: 2, cacheWrite: 23, output: 3 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+  ]);
+  try {
+    const otelDir = path.join(dir, ".copilot", "otel");
+    fs.mkdirSync(otelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(otelDir, "chat.jsonl"),
+      JSON.stringify(makeChatLogRecord({ model: "gpt-chat", seconds: 1780000000 })) + "\n",
+      "utf8",
+    );
+    await withSyncHome(dir, async () => {
+      await cmdSync(["--auto", "--from-retry", "--source=copilot"]);
+      const rows = readQueue(
+        path.join(dir, ".tokentracker", "tracker", "queue.jsonl"),
+      );
+      assert.deepEqual(
+        rows.map((row) => row.model).sort(),
+        ["gpt-5.6-luna", "gpt-chat"],
+      );
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("first adoption deduplicates a current CLI OTEL file against store history", async () => {
+  const seconds = 1780000000;
+  const sessionId = "first-adoption-otel-match";
+  const { dir, dbPath } = makeStoreDb([
+    {
+      id: 1,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 100,
+      output_tokens: 20,
+      token_details_json: tokenDetails({ input: 100, output: 20 }),
+      created_at: new Date(seconds * 1000 + 30).toISOString(),
+    },
+  ]);
+  try {
+    const otelDir = path.join(dir, ".copilot", "otel");
+    fs.mkdirSync(otelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(otelDir, "cli.jsonl"),
+      JSON.stringify(
+        makeCliSpan({
+          sessionId,
+          model: "gpt-5.6-luna",
+          input: 100,
+          output: 20,
+          seconds,
+        }),
+      ) + "\n",
+      "utf8",
+    );
+    await withSyncHome(dir, async () => {
+      await cmdSync(["--auto", "--from-retry", "--source=copilot"]);
+      const trackerDir = path.join(dir, ".tokentracker", "tracker");
+      const rows = readQueue(path.join(trackerDir, "queue.jsonl"));
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].total_tokens, 120);
+      const cursors = JSON.parse(
+        fs.readFileSync(path.join(trackerDir, "cursors.json"), "utf8"),
+      );
+      assert.equal(cursors.copilotStore.dbs[dbPath].lastId, 1);
+      assert.equal(cursors.copilot.recentUsageEvents[0].consumed, true);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cmdSync backfills an imported CLI session whose App baseline is still zero", async () => {
+  const sessionId = "imported-zero-app-session";
+  const { dir, copilotHome, dbPath } = makeStoreDb([
+    {
+      id: 1,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 25,
+      output_tokens: 3,
+      token_details_json: tokenDetails({ input: 2, cacheWrite: 23, output: 3 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+  ]);
+  makeAppDb(copilotHome, {
+    id: sessionId,
+    model: null,
+    created_at: "2026-07-10T10:00:00Z",
+    updated_at: "2026-07-10T10:05:00Z",
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    total_cached_tokens: 0,
+    total_reasoning_tokens: 0,
+  });
+  try {
+    await withSyncHome(dir, async () => {
+      await cmdSync(["--auto", "--from-retry", "--source=copilot"]);
+      const trackerDir = path.join(dir, ".tokentracker", "tracker");
+      const rows = readQueue(path.join(trackerDir, "queue.jsonl"));
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].total_tokens, 28);
+      const cursors = JSON.parse(
+        fs.readFileSync(path.join(trackerDir, "cursors.json"), "utf8"),
+      );
+      assert.equal(cursors.copilotStore.dbs[dbPath].lastId, 1);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cmdSync freezes legacy cursors while an adopted store is unavailable", async () => {
+  const sessionId = "temporarily-missing-store";
+  const { dir, copilotHome, dbPath: storeDb } = makeStoreDb([
+    {
+      id: 1,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 20,
+      output_tokens: 2,
+      token_details_json: tokenDetails({ input: 2, cacheWrite: 18, output: 2 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+  ]);
+  const appDb = makeAppDb(copilotHome, {
+    id: sessionId,
+    model: "gpt-5.6-luna",
+    created_at: "2026-07-10T10:00:00Z",
+    updated_at: "2026-07-10T10:00:00Z",
+    total_input_tokens: 20,
+    total_output_tokens: 2,
+    total_cached_tokens: 0,
+    total_reasoning_tokens: 0,
+  });
+  try {
+    await withSyncHome(dir, async () => {
+      const args = ["--auto", "--from-retry", "--source=copilot"];
+      await cmdSync(args);
+      const trackerDir = path.join(dir, ".tokentracker", "tracker");
+      const queuePath = path.join(trackerDir, "queue.jsonl");
+      const cursorsPath = path.join(trackerDir, "cursors.json");
+      const beforeQueue = fs.readFileSync(queuePath, "utf8");
+      const beforeCursor = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.equal(beforeCursor.copilotStore.active, true);
+
+      fs.rmSync(storeDb, { force: true });
+      updateAppUsage(appDb, sessionId, {
+        updated_at: "2026-07-10T10:30:00Z",
+        total_input_tokens: 50,
+        total_output_tokens: 5,
+      });
+      await cmdSync(args);
+      assert.equal(fs.readFileSync(queuePath, "utf8"), beforeQueue);
+      const frozenCursor = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.equal(
+        frozenCursor.copilotApp.dbs[appDb].sessionTotals[sessionId].input,
+        20,
+      );
+      assert.equal(frozenCursor.copilotStore.active, true);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cmdSync catches up legacy once when an adopted store is recreated", async () => {
+  const sessionId = "recreated-store-session";
+  const { dir, copilotHome, dbPath: storeDb } = makeStoreDb([
+    {
+      id: 1,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 20,
+      output_tokens: 2,
+      token_details_json: tokenDetails({ input: 2, cacheWrite: 18, output: 2 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+  ]);
+  const appDb = makeAppDb(copilotHome, {
+    id: sessionId,
+    model: "gpt-5.6-luna",
+    created_at: "2026-07-10T10:00:00Z",
+    updated_at: "2026-07-10T10:00:00Z",
+    total_input_tokens: 20,
+    total_output_tokens: 2,
+    total_cached_tokens: 0,
+    total_reasoning_tokens: 0,
+  });
+  try {
+    await withSyncHome(dir, async () => {
+      const args = ["--auto", "--from-retry", "--source=copilot"];
+      await cmdSync(args);
+      const queuePath = path.join(dir, ".tokentracker", "tracker", "queue.jsonl");
+
+      fs.rmSync(storeDb, { force: true });
+      runSql(storeDb, `
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (6);
+        CREATE TABLE assistant_usage_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL,
+          model TEXT NOT NULL,
+          input_tokens INTEGER,
+          output_tokens INTEGER,
+          cache_read_tokens INTEGER,
+          cache_write_tokens INTEGER,
+          reasoning_tokens INTEGER,
+          token_details_json TEXT,
+          created_at TEXT
+        );
+      `);
+      insertUsage(storeDb, {
+        id: 1,
+        session_id: sessionId,
+        model: "gpt-5.6-luna",
+        input_tokens: 30,
+        output_tokens: 3,
+        token_details_json: tokenDetails({ input: 3, cacheWrite: 27, output: 3 }),
+        created_at: "2026-07-10T10:30:00Z",
+      });
+      updateAppUsage(appDb, sessionId, {
+        updated_at: "2026-07-10T10:30:00Z",
+        total_input_tokens: 50,
+        total_output_tokens: 5,
+      });
+      await cmdSync(args);
+      let rows = readQueue(queuePath);
+      assert.equal(rows.reduce((sum, row) => sum + row.total_tokens, 0), 22 + 33);
+      let cursors = JSON.parse(
+        fs.readFileSync(
+          path.join(dir, ".tokentracker", "tracker", "cursors.json"),
+          "utf8",
+        ),
+      );
+      assert.equal(cursors.copilotStore.pendingLegacyCatchup, false);
+
+      insertUsage(storeDb, {
+        id: 2,
+        session_id: sessionId,
+        model: "gpt-5.6-terra",
+        input_tokens: 10,
+        output_tokens: 1,
+        token_details_json: tokenDetails({ input: 1, cacheWrite: 9, output: 1 }),
+        created_at: "2026-07-10T11:00:00Z",
+      });
+      updateAppUsage(appDb, sessionId, {
+        updated_at: "2026-07-10T11:00:00Z",
+        total_input_tokens: 60,
+        total_output_tokens: 6,
+      });
+      await cmdSync(args);
+      rows = readQueue(queuePath);
+      assert.equal(rows.reduce((sum, row) => sum + row.total_tokens, 0), 22 + 33 + 11);
+      assert.equal(rows.filter((row) => row.model === "gpt-5.6-terra").length, 1);
+      cursors = JSON.parse(
+        fs.readFileSync(
+          path.join(dir, ".tokentracker", "tracker", "cursors.json"),
+          "utf8",
+        ),
+      );
+      assert.equal(cursors.copilotStore.pendingLegacyCatchup, false);
+
+      const beforeRepeat = fs.readFileSync(queuePath, "utf8");
+      await cmdSync(args);
+      assert.equal(fs.readFileSync(queuePath, "utf8"), beforeRepeat);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("reset catch-up stays pending after failure and uses one fixed barrier", async () => {
+  const sessionId = "reset-catchup-retry";
+  const { dir, copilotHome, dbPath: storeDb } = makeStoreDb([
+    {
+      id: 1,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 20,
+      output_tokens: 2,
+      token_details_json: tokenDetails({ input: 2, cacheWrite: 18, output: 2 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+  ]);
+  let appDb = makeAppDb(copilotHome, {
+    id: sessionId,
+    model: "gpt-5.6-luna",
+    created_at: "2026-07-10T10:00:00Z",
+    updated_at: "2026-07-10T10:00:00Z",
+    total_input_tokens: 20,
+    total_output_tokens: 2,
+    total_cached_tokens: 0,
+    total_reasoning_tokens: 0,
+  });
+  try {
+    await withSyncHome(dir, async () => {
+      const args = ["--auto", "--from-retry", "--source=copilot"];
+      const trackerDir = path.join(dir, ".tokentracker", "tracker");
+      const queuePath = path.join(trackerDir, "queue.jsonl");
+      const cursorsPath = path.join(trackerDir, "cursors.json");
+      await cmdSync(args);
+
+      fs.rmSync(storeDb, { force: true });
+      runSql(storeDb, `
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (6);
+        CREATE TABLE assistant_usage_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL,
+          model TEXT NOT NULL,
+          input_tokens INTEGER,
+          output_tokens INTEGER,
+          cache_read_tokens INTEGER,
+          cache_write_tokens INTEGER,
+          reasoning_tokens INTEGER,
+          token_details_json TEXT,
+          created_at TEXT
+        );
+      `);
+      insertUsage(storeDb, {
+        id: 1,
+        session_id: sessionId,
+        model: "gpt-5.6-luna",
+        input_tokens: 30,
+        output_tokens: 3,
+        token_details_json: tokenDetails({ input: 3, cacheWrite: 27, output: 3 }),
+        created_at: "2026-07-10T10:30:00Z",
+      });
+      fs.rmSync(appDb, { force: true });
+      const beforeFailure = fs.readFileSync(queuePath, "utf8");
+      await cmdSync(args);
+      assert.equal(fs.readFileSync(queuePath, "utf8"), beforeFailure);
+      let cursors = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.equal(cursors.copilotStore.pendingLegacyCatchup, true);
+      assert.equal(cursors.copilotStore.dbs[storeDb].pendingCatchupMaxId, 1);
+
+      insertUsage(storeDb, {
+        id: 2,
+        session_id: sessionId,
+        model: "gpt-5.6-terra",
+        input_tokens: 10,
+        output_tokens: 1,
+        token_details_json: tokenDetails({ input: 1, cacheWrite: 9, output: 1 }),
+        created_at: "2026-07-10T11:00:00Z",
+      });
+      fs.rmSync(appDb, { force: true });
+      appDb = makeAppDb(copilotHome, {
+        id: sessionId,
+        model: "gpt-5.6-terra",
+        created_at: "2026-07-10T10:00:00Z",
+        updated_at: "2026-07-10T11:00:00Z",
+        total_input_tokens: 60,
+        total_output_tokens: 6,
+        total_cached_tokens: 0,
+        total_reasoning_tokens: 0,
+      });
+      await cmdSync(args);
+      const rows = readQueue(queuePath);
+      assert.equal(rows.reduce((sum, row) => sum + row.total_tokens, 0), 22 + 44);
+      cursors = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.equal(cursors.copilotStore.pendingLegacyCatchup, false);
+      assert.equal(cursors.copilotStore.dbs[storeDb].lastId, 2);
+      assert.equal(cursors.copilotStore.dbs[storeDb].pendingCatchupMaxId, null);
+
+      const beforeRepeat = fs.readFileSync(queuePath, "utf8");
+      await cmdSync(args);
+      assert.equal(fs.readFileSync(queuePath, "utf8"), beforeRepeat);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

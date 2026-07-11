@@ -175,8 +175,8 @@ brew install mm7894215/tokentracker/tokentracker
 | **OpenClaw** | ✅ 自动 | Session 插件 |
 | **Every Code** | ✅ 自动 | TOML notify hook |
 | **Hermes Agent** | ✅ 自动 | SQLite sessions 表（`~/.hermes/state.db`） |
-| **GitHub Copilot App** | ✅ 自动 | 被动会话汇总读取（`~/.copilot/data.db`，或 `COPILOT_HOME/data.db`） |
-| **GitHub Copilot CLI / Chat 扩展** | ✅ 自动 | OpenTelemetry 文件导出（`COPILOT_OTEL_FILE_EXPORTER_PATH`） |
+| **GitHub Copilot App / CLI** | ✅ 自动 | 统一逐请求 SQLite 用量（`~/.copilot/session-store.db`）；App DB 作为回退 |
+| **GitHub Copilot Chat 扩展 / 旧版 CLI** | ✅ 自动 | OpenTelemetry 文件导出（`COPILOT_OTEL_FILE_EXPORTER_PATH`） |
 | **Kimi Code** | ✅ 自动 | 被动读取 `wire.jsonl`（`~/.kimi/sessions/**/wire.jsonl`） |
 | **oh-my-pi (Pi Coding Agent)** | ✅ 自动 | 被动读取（`~/.omp/agent/sessions/**/*.jsonl`） |
 | **CodeBuddy** (腾讯) | ✅ 自动 | 写入 `~/.codebuddy/settings.json` 的 SessionEnd hook（Claude-Code fork） |
