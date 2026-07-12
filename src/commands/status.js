@@ -224,7 +224,7 @@ async function cmdStatus(argv = []) {
   // CodeBuddy — passive scan only (no hooks). Surface the file count so
   // operators can confirm JSONL sessions and extension logs are discovered.
   const codebuddyHome = resolveCodebuddyHome(process.env);
-  const codebuddyInstalled = fssync.existsSync(codebuddyHome);
+  const codebuddyInstalled = Boolean(codebuddyHome && fssync.existsSync(codebuddyHome));
   const codebuddyFiles = codebuddyInstalled
     ? resolveCodebuddyProjectFiles(process.env)
     : [];
@@ -232,7 +232,7 @@ async function cmdStatus(argv = []) {
   // WorkBuddy — passive scan (sibling Claude-Code fork). Surface both the
   // recursive JSONL count and SQLite fallback so operators can confirm coverage.
   const workbuddyHome = resolveWorkbuddyHome(process.env);
-  const workbuddyInstalled = fssync.existsSync(workbuddyHome);
+  const workbuddyInstalled = Boolean(workbuddyHome && fssync.existsSync(workbuddyHome));
   const workbuddyFiles = workbuddyInstalled
     ? resolveWorkbuddyProjectFiles(process.env)
     : [];
@@ -254,7 +254,7 @@ async function cmdStatus(argv = []) {
 
   // Craft Agents — passive scan only (no hooks).
   const craftConfigDir = resolveCraftConfigDir(process.env);
-  const craftInstalled = fssync.existsSync(craftConfigDir);
+  const craftInstalled = Boolean(craftConfigDir && fssync.existsSync(craftConfigDir));
   const craftFiles = craftInstalled ? resolveCraftSessionFiles(process.env) : [];
 
   // Kilo CLI (kilo.ai @kilocode/plugin) — passive scan of kilo.db.
