@@ -126,6 +126,7 @@ if [[ "${CI:-}" == "true" ]]; then
     rm -f "$FINAL_DMG"
     create-dmg \
         --volname "$VOLUME_NAME" \
+        --format ULMO \
         --window-pos 200 120 \
         --window-size "$WIN_W" "$WIN_H" \
         --icon-size "$ICON_SIZE" \
@@ -202,10 +203,11 @@ APPLESCRIPT
 fi
 
 # --- Convert to compressed read-only ---
+# ULMO (LZMA) shaves ~25% off UDZO for the Node-binary-heavy payload; it
+# requires macOS 10.15+ to mount, well below the app's 12.0 deployment target.
 echo "==> Compressing to final DMG..."
 hdiutil convert "$TEMP_DMG" \
-    -format UDZO \
-    -imagekey zlib-level=9 \
+    -format ULMO \
     -o "$FINAL_DMG"
 
 rm -f "$TEMP_DMG"

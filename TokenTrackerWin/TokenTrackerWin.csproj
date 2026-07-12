@@ -25,6 +25,10 @@
     <Version>0.77.0</Version>
     <Product>TokenTracker</Product>
     <Company>TokenTracker</Company>
+    <!-- App UI strings live in TrayStrings/NativeLocalization (no .resx), so the
+         self-contained publish only needs English framework satellite resources;
+         the other ~35 framework locale folders are dead weight in the installer. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <ItemGroup>

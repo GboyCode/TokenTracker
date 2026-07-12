@@ -95,6 +95,18 @@ if [[ "$BUNDLED_NODE_VERSION" != "$EXPECTED_NODE_VERSION" ]]; then
   echo "❌ Bundled Node drifted: expected v${EXPECTED_NODE_VERSION}, got v${BUNDLED_NODE_VERSION}" >&2
   exit 1
 fi
+# Strip local symbols (~44MB off the universal binary). strip invalidates the
+# code signature, so re-sign ad-hoc immediately — CI re-signs this Mach-O again
+# before DMG packaging, but local builds run the binary straight from here.
+echo "✂️  Stripping local symbols..."
+strip -x "$EMBED_DIR/node"
+codesign -s - -f "$EMBED_DIR/node"
+STRIPPED_NODE_VERSION="$("$EMBED_DIR/node" -p 'process.versions.node' 2>/dev/null || echo unknown)"
+if [[ "$STRIPPED_NODE_VERSION" != "$EXPECTED_NODE_VERSION" ]]; then
+  echo "❌ Stripped Node binary no longer runs (got: $STRIPPED_NODE_VERSION)" >&2
+  exit 1
+fi
+
 echo "✅ Node.js binary ready ($TARGET_ARCH) — v${BUNDLED_NODE_VERSION}"
 file "$EMBED_DIR/node"
 
