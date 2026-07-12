@@ -287,9 +287,14 @@ Configure this behavior using the `TOKENTRACKER_WSL_MODE` environment variable:
 > [!NOTE]
 > **Preference (`-first`) vs. Isolation (`-only`):** Preference modes prioritize your choice but gracefully fall back to scanning the other environment if the tool is missing. Isolation modes strictly lock scanning to that single environment and ignore the other completely.
 
-Supported providers for WSL auto-discovery:
-* **File-list & Active CLIs:** Every Code, Kimi (legacy & Code), Gemini CLI, Antigravity, OpenCode, Codex CLI, CodeBuddy, WorkBuddy, oh-my-pi, pi, Grok Build, GitHub Copilot, Roo Code, Craft, Kilo Code.
-* **SQLite-based DBs:** Hermes, Zed Agent, Goose, Droid, Kilo CLI, Mimo Code, ZCode.
+Supported providers for WSL auto-discovery and aggregation:
+* **Dual-Install Aggregation (`both` mode):**
+  * **File-list & Active CLIs:** Every Code, Kimi (legacy & Code), Gemini CLI, Antigravity, OpenCode (JSON), Codex CLI, CodeBuddy, WorkBuddy, oh-my-pi (omp), pi, GitHub Copilot (OTEL), Roo Code, Craft, Kilo Code, Droid.
+  * **SQLite-based DBs:** Hermes, Zed Agent, Goose, OpenCode (`opencode.db`), GitHub Copilot (App DB).
+* **WSL Auto-Discovery (Preference/Isolation only, no dual aggregation):**
+  * Grok Build (dynamically selects either native or WSL depending on the mode, but does not aggregate both in `both` mode).
+* **Native Only (No WSL support yet):**
+  * Kilo CLI, Mimo Code, ZCode.
 
 ---
 

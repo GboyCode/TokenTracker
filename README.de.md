@@ -281,9 +281,14 @@ Konfiguriere dieses Verhalten über die Umgebungsvariable `TOKENTRACKER_WSL_MODE
 > [!NOTE]
 > **Präferenz (`-first`) vs. Isolierung (`-only`):** Präferenzmodi bevorzugen deine Auswahl, weichen aber automatisch auf die andere Umgebung aus, falls das Tool dort fehlt. Isolierungsmodi beschränken den Scan strikt auf eine Umgebung und ignorieren die andere komplett.
 
-Diese Tools werden für die WSL-Erkennung unterstützt:
-* **Dateibasiert (Logs & Transkripte):** Every Code, Kimi (legacy & Code), Gemini CLI, Antigravity, OpenCode, Codex CLI, CodeBuddy, WorkBuddy, oh-my-pi, pi, Grok Build, GitHub Copilot, Roo Code, Craft, Kilo Code.
-* **Datenbankbasiert (SQLite):** Hermes, Zed Agent, Goose, Droid, Kilo CLI, Mimo Code, ZCode.
+Unterstützte Provider für WSL-Erkennung und Zusammenführung (Aggregation):
+* **Zusammenführung bei paralleler Installation (`both`-Modus):**
+  * **Dateibasiert (Logs & Transkripte):** Every Code, Kimi (legacy & Code), Gemini CLI, Antigravity, OpenCode (JSON), Codex CLI, CodeBuddy, WorkBuddy, oh-my-pi (omp), pi, GitHub Copilot (OTEL), Roo Code, Craft, Kilo Code, Droid.
+  * **Datenbankbasiert (SQLite):** Hermes, Zed Agent, Goose, OpenCode (`opencode.db`), GitHub Copilot (App DB).
+* **WSL-Erkennung (nur Präferenz/Isolierung, keine Zusammenführung):**
+  * Grok Build (wählt dynamisch entweder die native oder WSL-Umgebung je nach Modus, führt aber im `both`-Modus nicht beide zusammen).
+* **Nur nativ (noch keine WSL-Unterstützung):**
+  * Kilo CLI, Mimo Code, ZCode.
 
 ---
 
