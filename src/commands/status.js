@@ -107,11 +107,11 @@ async function cmdStatus(argv = []) {
   const codeConfigPath = path.join(codeHome, "config.toml");
   const claudeSettingsPath = path.join(home, ".claude", "settings.json");
   const codebuddySettingsPath = path.join(
-    process.env.CODEBUDDY_HOME || path.join(home, ".codebuddy"),
+    resolveCodebuddyHome(process.env) || path.join(home, ".codebuddy"),
     "settings.json",
   );
   const workbuddySettingsPath = path.join(
-    process.env.WORKBUDDY_HOME || path.join(home, ".workbuddy"),
+    resolveWorkbuddyHome(process.env) || path.join(home, ".workbuddy"),
     "settings.json",
   );
   const geminiConfigDir = resolveGeminiConfigDir({ home, env: process.env });
