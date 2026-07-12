@@ -195,7 +195,7 @@ brew install mm7894215/tokentracker/tokentracker
 > **需要手动装什么插件 / hook 吗？** 不需要。`tokentracker`（或 `tokentracker init`）第一次跑的时候会全部搞定：
 > - **基于 hook 的工具**（Claude Code、Codex、Gemini、Every Code、**CodeBuddy**、**WorkBuddy**、**Grok Build**）—— 我们把 SessionEnd hook 或 TOML notify 条目写入它们自己的配置文件
 > - **基于插件的工具**（OpenCode、**OpenClaw**）—— 插件随 npm 包一起分发。OpenClaw 的 session plugin 位于 `~/.tokentracker/tracker/openclaw-plugin/openclaw-session-sync/`；TokenTracker 会通过 OpenClaw 自己的 CLI 挂接并启用它，然后写入 `hooks.allowConversationAccess=true`，让 OpenClaw 放行触发同步的会话结束事件。无需下载、无需拖拽
-> - **被动读取类**（Cursor、Kiro、Hermes、Kimi Code、Copilot、**Grok Build**、**oh-my-pi**、**pi**、**Craft Agents**、**Kilo CLI**、**Kilo Code**、**Roo Code**、**Antigravity**、**Zed Agent**、**Goose**、**Mimo Code**、**ZCode**）—— 完全不往它们里面塞东西，只读取它们自己产生的文件（SQLite DB、JSONL、OTEL 导出、会话轨迹日志）。Copilot App 的用量只读取 `~/.copilot/data.db` 中 `sessions.total_*` 的 token 汇总列，并入现有 `copilot` 聚合统计（总量、趋势、模型拆分、成本）；Copilot CLI / Chat 扩展仍走 OTEL，两条数据面各自维护独立的同步游标以避免重复计数
+> - **被动读取类**（Cursor、Kiro、Hermes、Kimi Code、Copilot、**Grok Build**、**oh-my-pi**、**pi**、**Craft Agents**、**Kilo CLI**、**Kilo Code**、**Roo Code**、**Antigravity**、**Zed Agent**、**Goose**、**Mimo Code**、**ZCode**）—— 完全不往它们里面塞东西，只读取它们自己产生的文件（SQLite DB、JSONL、OTEL 导出、会话轨迹日志）。Copilot App / CLI 的用量按请求读取 `~/.copilot/session-store.db`；`data.db` 保留为 App 回退，Chat 扩展和旧版 CLI 继续使用 OTEL。TokenTracker 会协调这些数据源，使重叠请求只统计一次
 > - **Grok Build 估算说明** —— Grok 当前本地遥测提供 `updates.jsonl` 里的累计 `totalTokens`，但还没有稳定的输入/输出/cache 拆分；`signals.json` 仍作为 `contextTokensUsed` 快照兜底。所以在 Grok 提供按调用粒度的用量明细之前，TokenTracker 对 Grok 成本仍是估算值
 >
 > 任何时候都可以用 `tokentracker status` 查看每个集成的状态。如果显示 `skipped`，`detail` 列会解释原因（例如某工具 CLI 不在 `PATH` 上、config 不可读等）。

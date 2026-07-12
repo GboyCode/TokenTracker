@@ -10017,7 +10017,9 @@ async function parseCopilotSessionStoreIncremental({
   let recordsProcessed = 0;
   let eventsAggregated = 0;
   let dbErrors = 0;
-  let pendingLegacyCatchup = storeState.pendingLegacyCatchup === true;
+  const legacyGlobalPending = storeState.pendingLegacyCatchup === true;
+  const pendingDbPaths = [];
+  const canonicalDbPaths = [];
   const globalAdoptionPending = storeState.active !== true;
 
   for (const resolvedDb of uniquePaths) {
@@ -10073,10 +10075,13 @@ async function parseCopilotSessionStoreIncremental({
         metadata.maxId < priorLastId ||
         lastRowChangedAtSameId;
       const firstId = needsAdoption && !backfillOnFirstRun ? metadata.maxId : priorLastId;
+      let dbPendingLegacyCatchup =
+        dbState.pendingLegacyCatchup === true ||
+        (legacyGlobalPending && Boolean(dbState.adoptedAt));
 
       if (needsAdoption) {
         adoptedThisRun = true;
-        if (storeState.active === true) pendingLegacyCatchup = true;
+        if (storeState.active === true) dbPendingLegacyCatchup = true;
         if (!backfillOnFirstRun) {
           for (const sessionId of readCopilotSessionStoreSessionIds(snap.path, sqliteOptions)) {
             seenSessions.add(sessionId);
@@ -10085,7 +10090,7 @@ async function parseCopilotSessionStoreIncremental({
       }
 
       const waitForLegacyCatchup =
-        storeState.active === true && pendingLegacyCatchup;
+        storeState.active === true && dbPendingLegacyCatchup;
       const rows =
         waitForLegacyCatchup || (needsAdoption && !backfillOnFirstRun)
           ? []
@@ -10175,12 +10180,15 @@ async function parseCopilotSessionStoreIncremental({
         pendingCatchupFingerprint: waitForLegacyCatchup
           ? fingerprint
           : null,
+        pendingLegacyCatchup: waitForLegacyCatchup,
         dbIno: typeof currentIno === "number" ? currentIno : null,
         lastDbFingerprint: fingerprint,
         lastError: null,
         lastErrorAt: null,
         updatedAt,
       };
+      if (waitForLegacyCatchup) pendingDbPaths.push(resolvedDb);
+      else canonicalDbPaths.push(resolvedDb);
       activeDbCount++;
     } catch (err) {
       if (err?.code !== "ENOENT") dbErrors++;
@@ -10190,6 +10198,12 @@ async function parseCopilotSessionStoreIncremental({
         lastErrorAt: updatedAt,
         updatedAt,
       };
+      if (
+        dbState.pendingLegacyCatchup === true ||
+        (legacyGlobalPending && Boolean(dbState.adoptedAt))
+      ) {
+        pendingDbPaths.push(resolvedDb);
+      }
     } finally {
       if (snap) snap.cleanup();
     }
@@ -10212,6 +10226,9 @@ async function parseCopilotSessionStoreIncremental({
     activeDbCount === uniquePaths.length &&
     dbErrors === 0;
   const canonicalActive = storeState.active === true || allCurrentPathsHealthy;
+  const pendingLegacyCatchup = Object.values(dbStates).some(
+    (dbState) => dbState?.pendingLegacyCatchup === true,
+  );
   hourlyState.updatedAt = updatedAt;
   cursors.hourly = hourlyState;
   cursors.copilotStore = {
@@ -10228,6 +10245,8 @@ async function parseCopilotSessionStoreIncremental({
     active: canonicalActive,
     healthy: allCurrentPathsHealthy,
     adoptedThisRun: adoptedThisRun || pendingLegacyCatchup,
+    pendingDbPaths,
+    canonicalDbPaths,
     recordsProcessed,
     eventsAggregated,
     bucketsQueued,
@@ -10249,10 +10268,16 @@ function finalizeCopilotStoreLegacyCatchup({
     ? dbPaths
     : Object.keys(state.dbs || {});
   const updatedAt = new Date().toISOString();
-  const updates = [];
+  let failed = false;
   for (const dbPath of paths) {
     const dbState = state.dbs?.[dbPath];
-    if (!dbState || typeof dbState !== "object") continue;
+    if (
+      !dbState ||
+      typeof dbState !== "object" ||
+      dbState.pendingLegacyCatchup !== true
+    ) {
+      continue;
+    }
     let snap = null;
     try {
       const before = sqliteSidecarFingerprint(dbPath);
@@ -10260,39 +10285,36 @@ function finalizeCopilotStoreLegacyCatchup({
         dbState.pendingCatchupFingerprint &&
         !sameSqliteFingerprint(before, dbState.pendingCatchupFingerprint)
       ) {
-        return false;
+        failed = true;
+        continue;
       }
       snap = snapshotSqliteDb(dbPath);
       const metadata = readCopilotSessionStoreMetadata(snap.path, sqliteOptions);
       const after = sqliteSidecarFingerprint(dbPath);
-      if (!metadata.active || !sameSqliteFingerprint(before, after)) return false;
-      updates.push({
-        dbState,
-        lastId: metadata.maxId,
-        dbIno: typeof after?.db?.ino === "number" ? after.db.ino : null,
-        fingerprint: after,
-        schemaVersion: metadata.schemaVersion,
-        lastRowKey: metadata.lastRowKey,
-      });
+      if (!metadata.active || !sameSqliteFingerprint(before, after)) {
+        failed = true;
+        continue;
+      }
+      dbState.lastId = metadata.maxId;
+      dbState.pendingCatchupMaxId = null;
+      dbState.pendingCatchupFingerprint = null;
+      dbState.pendingLegacyCatchup = false;
+      dbState.dbIno = typeof after?.db?.ino === "number" ? after.db.ino : null;
+      dbState.lastDbFingerprint = after;
+      dbState.schemaVersion = metadata.schemaVersion;
+      dbState.lastRowKey = metadata.lastRowKey;
+      dbState.updatedAt = updatedAt;
     } catch (_e) {
-      return false;
+      failed = true;
     } finally {
       if (snap) snap.cleanup();
     }
   }
-  for (const update of updates) {
-    update.dbState.lastId = update.lastId;
-    update.dbState.pendingCatchupMaxId = null;
-    update.dbState.pendingCatchupFingerprint = null;
-    update.dbState.dbIno = update.dbIno;
-    update.dbState.lastDbFingerprint = update.fingerprint;
-    update.dbState.schemaVersion = update.schemaVersion;
-    update.dbState.lastRowKey = update.lastRowKey;
-    update.dbState.updatedAt = updatedAt;
-  }
-  state.pendingLegacyCatchup = false;
+  state.pendingLegacyCatchup = Object.values(state.dbs || {}).some(
+    (dbState) => dbState?.pendingLegacyCatchup === true,
+  );
   state.updatedAt = updatedAt;
-  return true;
+  return !failed && !state.pendingLegacyCatchup;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

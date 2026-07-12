@@ -31,11 +31,7 @@ function runSql(dbPath, sql) {
   cp.execFileSync("sqlite3", [dbPath, sql], { stdio: ["ignore", "ignore", "pipe"] });
 }
 
-function makeStoreDb(rows = []) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-store-test-"));
-  const copilotHome = path.join(dir, ".copilot");
-  fs.mkdirSync(copilotHome, { recursive: true });
-  const dbPath = path.join(copilotHome, "session-store.db");
+function createStoreSchema(dbPath) {
   runSql(dbPath, `
     CREATE TABLE schema_version (version INTEGER NOT NULL);
     INSERT INTO schema_version (version) VALUES (6);
@@ -52,6 +48,14 @@ function makeStoreDb(rows = []) {
       created_at TEXT
     );
   `);
+}
+
+function makeStoreDb(rows = []) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-store-test-"));
+  const copilotHome = path.join(dir, ".copilot");
+  fs.mkdirSync(copilotHome, { recursive: true });
+  const dbPath = path.join(copilotHome, "session-store.db");
+  createStoreSchema(dbPath);
   for (const row of rows) insertUsage(dbPath, row);
   return { dir, copilotHome, dbPath };
 }
@@ -519,6 +523,106 @@ test("session store detects same-id reset even when the inode is reused", async 
     assert.equal(cursors.copilotStore.dbs[dbPath].pendingCatchupMaxId, 1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("one store reset does not pause or block another active store", async () => {
+  const first = makeStoreDb([
+    {
+      id: 1,
+      session_id: "first-store-session",
+      model: "gpt-5.6-luna",
+      input_tokens: 10,
+      output_tokens: 1,
+      token_details_json: tokenDetails({ input: 10, output: 1 }),
+      created_at: "2026-07-10T12:00:00Z",
+    },
+  ]);
+  const second = makeStoreDb([
+    {
+      id: 1,
+      session_id: "second-store-session",
+      model: "gpt-5.6-terra",
+      input_tokens: 20,
+      output_tokens: 2,
+      token_details_json: tokenDetails({ input: 20, output: 2 }),
+      created_at: "2026-07-10T12:00:00Z",
+    },
+  ]);
+  const queueDir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-multi-store-"));
+  try {
+    const queuePath = path.join(queueDir, "queue.jsonl");
+    const cursors = {};
+    await parseCopilotSessionStoreIncremental({
+      dbPaths: [first.dbPath, second.dbPath],
+      cursors,
+      queuePath,
+      backfillOnFirstRun: true,
+    });
+
+    fs.rmSync(first.dbPath, { force: true });
+    createStoreSchema(first.dbPath);
+    insertUsage(first.dbPath, {
+      id: 1,
+      session_id: "first-store-reset",
+      model: "gpt-5.6-luna",
+      input_tokens: 30,
+      output_tokens: 3,
+      token_details_json: tokenDetails({ input: 30, output: 3 }),
+      created_at: "2026-07-10T12:30:00Z",
+    });
+    insertUsage(second.dbPath, {
+      id: 2,
+      session_id: "second-store-session",
+      model: "gpt-5.6-terra",
+      input_tokens: 5,
+      output_tokens: 1,
+      token_details_json: tokenDetails({ input: 5, output: 1 }),
+      created_at: "2026-07-10T12:30:00Z",
+    });
+
+    const result = await parseCopilotSessionStoreIncremental({
+      dbPaths: [first.dbPath, second.dbPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(result.eventsAggregated, 1);
+    assert.deepEqual(result.pendingDbPaths, [first.dbPath]);
+    assert.deepEqual(result.canonicalDbPaths, [second.dbPath]);
+    assert.equal(cursors.copilotStore.dbs[first.dbPath].pendingLegacyCatchup, true);
+    assert.equal(cursors.copilotStore.dbs[second.dbPath].lastId, 2);
+
+    insertUsage(second.dbPath, {
+      id: 3,
+      session_id: "second-store-session",
+      model: "gpt-5.6-terra",
+      input_tokens: 7,
+      output_tokens: 1,
+      token_details_json: tokenDetails({ input: 7, output: 1 }),
+      created_at: "2026-07-10T12:31:00Z",
+    });
+    assert.equal(
+      finalizeCopilotStoreLegacyCatchup({
+        dbPaths: [first.dbPath, second.dbPath],
+        cursors,
+      }),
+      true,
+    );
+    assert.equal(cursors.copilotStore.dbs[first.dbPath].pendingLegacyCatchup, false);
+    assert.equal(cursors.copilotStore.dbs[first.dbPath].lastId, 1);
+    assert.equal(cursors.copilotStore.dbs[second.dbPath].lastId, 2);
+
+    const afterFinalize = await parseCopilotSessionStoreIncremental({
+      dbPaths: [first.dbPath, second.dbPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(afterFinalize.eventsAggregated, 1);
+    assert.equal(cursors.copilotStore.dbs[second.dbPath].lastId, 3);
+  } finally {
+    fs.rmSync(first.dir, { recursive: true, force: true });
+    fs.rmSync(second.dir, { recursive: true, force: true });
+    fs.rmSync(queueDir, { recursive: true, force: true });
   }
 });
 
@@ -1364,7 +1468,7 @@ test("cmdSync backfills an imported CLI session whose App baseline is still zero
   }
 });
 
-test("cmdSync freezes legacy cursors while an adopted store is unavailable", async () => {
+test("cmdSync falls back to App DB while an adopted store is unavailable", async () => {
   const sessionId = "temporarily-missing-store";
   const { dir, copilotHome, dbPath: storeDb } = makeStoreDb([
     {
@@ -1405,13 +1509,66 @@ test("cmdSync freezes legacy cursors while an adopted store is unavailable", asy
         total_output_tokens: 5,
       });
       await cmdSync(args);
-      assert.equal(fs.readFileSync(queuePath, "utf8"), beforeQueue);
-      const frozenCursor = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.notEqual(fs.readFileSync(queuePath, "utf8"), beforeQueue);
+      const fallbackRows = readQueue(queuePath);
       assert.equal(
-        frozenCursor.copilotApp.dbs[appDb].sessionTotals[sessionId].input,
-        20,
+        fallbackRows.reduce((sum, row) => sum + row.total_tokens, 0),
+        22 + 33,
       );
-      assert.equal(frozenCursor.copilotStore.active, true);
+      const fallbackCursor = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.equal(
+        fallbackCursor.copilotApp.dbs[appDb].sessionTotals[sessionId].input,
+        50,
+      );
+      assert.equal(fallbackCursor.copilotStore.active, true);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cmdSync prunes a permanently missing App DB cursor once store is active", async () => {
+  const sessionId = "removed-app-db-session";
+  const { dir, copilotHome } = makeStoreDb([
+    {
+      id: 1,
+      session_id: sessionId,
+      model: "gpt-5.6-luna",
+      input_tokens: 20,
+      output_tokens: 2,
+      token_details_json: tokenDetails({ input: 2, cacheWrite: 18, output: 2 }),
+      created_at: "2026-07-10T10:00:00Z",
+    },
+  ]);
+  const appDb = makeAppDb(copilotHome, {
+    id: sessionId,
+    model: "gpt-5.6-luna",
+    created_at: "2026-07-10T10:00:00Z",
+    updated_at: "2026-07-10T10:00:00Z",
+    total_input_tokens: 20,
+    total_output_tokens: 2,
+    total_cached_tokens: 0,
+    total_reasoning_tokens: 0,
+  });
+  try {
+    await withSyncHome(dir, async () => {
+      const args = ["--auto", "--from-retry", "--source=copilot"];
+      const cursorsPath = path.join(
+        dir,
+        ".tokentracker",
+        "tracker",
+        "cursors.json",
+      );
+      await cmdSync(args);
+      let cursors = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.ok(cursors.copilotApp.dbs[appDb]);
+      assert.equal(cursors.copilotStore.active, true);
+
+      fs.rmSync(appDb, { force: true });
+      await cmdSync(args);
+      cursors = JSON.parse(fs.readFileSync(cursorsPath, "utf8"));
+      assert.equal(cursors.copilotApp.dbs[appDb], undefined);
+      assert.equal(cursors.copilotStore.active, true);
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -1582,6 +1739,7 @@ test("reset catch-up stays pending after failure and uses one fixed barrier", as
         created_at: "2026-07-10T10:30:00Z",
       });
       fs.rmSync(appDb, { force: true });
+      fs.writeFileSync(appDb, "not sqlite", "utf8");
       const beforeFailure = fs.readFileSync(queuePath, "utf8");
       await cmdSync(args);
       assert.equal(fs.readFileSync(queuePath, "utf8"), beforeFailure);

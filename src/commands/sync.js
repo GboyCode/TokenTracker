@@ -1373,6 +1373,8 @@ async function cmdSync(argv) {
       active: copilotStoreWasActive,
       healthy: false,
       adoptedThisRun: false,
+      pendingDbPaths: [],
+      canonicalDbPaths: [],
       recordsProcessed: 0,
       eventsAggregated: 0,
       bucketsQueued: 0,
@@ -1405,17 +1407,23 @@ async function cmdSync(argv) {
         warnProviderParseFailure("Copilot App/CLI session store", err, opts);
       }
     }
+    const copilotPathKey = (dbPath) => {
+      const normalized = path.normalize(dbPath);
+      return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+    };
+    const canonicalCopilotStorePaths = new Set(
+      (copilotStoreResult.canonicalDbPaths || []).map(copilotPathKey),
+    );
+    const pendingCopilotStorePaths = new Set(
+      (copilotStoreResult.pendingDbPaths || []).map(copilotPathKey),
+    );
     const copilotStoreOwnsNewUsage =
-      copilotStoreWasActive &&
       copilotStoreResult.active !== false &&
-      copilotStoreResult.healthy === true &&
-      copilotStoreResult.adoptedThisRun !== true;
-    const copilotLegacyFrozen =
-      copilotStoreWasActive && copilotStoreResult.healthy !== true;
+      canonicalCopilotStorePaths.size > 0;
 
     // ── GitHub Copilot CLI / Chat extension (OTEL JSONL files) ──
     const copilotPaths = sourceAllowed("copilot") ? resolveCopilotOtelPaths(process.env) : [];
-    if (!copilotLegacyFrozen && copilotPaths.length > 0) {
+    if (copilotPaths.length > 0) {
       if (progress?.enabled) {
         progress.start(`Parsing Copilot ${renderBar(0)} | buckets 0`);
       }
@@ -1448,14 +1456,25 @@ async function cmdSync(argv) {
     }
 
     // ── GitHub Copilot App (passive data.db session summaries) ──
+    const copilotAppDbStates =
+      cursors?.copilotApp?.dbs && typeof cursors.copilotApp.dbs === "object"
+        ? cursors.copilotApp.dbs
+        : null;
+    let copilotAppCursorAccessError = false;
+    if (copilotAppDbStates && (copilotStoreWasActive || copilotStorePaths.length > 0)) {
+      for (const dbPath of Object.keys(copilotAppDbStates)) {
+        try {
+          fssync.statSync(dbPath);
+        } catch (err) {
+          if (err?.code === "ENOENT") delete copilotAppDbStates[dbPath];
+          else copilotAppCursorAccessError = true;
+        }
+      }
+    }
+    if (copilotAppCursorAccessError) copilotLegacyHealthy = false;
     const trackedCopilotAppDbPaths = new Set(
       Object.keys(cursors?.copilotApp?.dbs || {}),
     );
-    const missingTrackedCopilotAppDb =
-      Array.from(trackedCopilotAppDbPaths).some((dbPath) => {
-        try { return !fssync.existsSync(dbPath); } catch (_e) { return true; }
-      });
-    if (missingTrackedCopilotAppDb) copilotLegacyHealthy = false;
     const copilotAppDbPaths = sourceAllowed("copilot")
       ? Array.from(
           new Set([
@@ -1467,47 +1486,59 @@ async function cmdSync(argv) {
           try { return fssync.existsSync(dbPath); } catch (_e) { return false; }
         })
       : [];
-    if (!copilotLegacyFrozen && copilotAppDbPaths.length > 0) {
+    if (copilotAppDbPaths.length > 0) {
       if (progress?.enabled) {
         progress.start(`Parsing Copilot App ${renderBar(0)} | buckets 0`);
       }
-      try {
-        const copilotAppResult = await parseCopilotAppDbIncremental({
-          dbPaths: copilotAppDbPaths,
-          cursors,
-          queuePath,
-          env: process.env,
-          observeOnly: copilotStoreOwnsNewUsage,
-          onProgress: (p) => {
-            if (!progress?.enabled) return;
-            const pct = p.total > 0 ? p.index / p.total : 1;
-            progress.update(
-              `Parsing Copilot App ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} sessions | buckets ${formatNumber(p.bucketsQueued)}`,
-            );
-          },
-        });
-        copilotResult = {
-          recordsProcessed: copilotResult.recordsProcessed + copilotAppResult.recordsProcessed,
-          eventsAggregated: copilotResult.eventsAggregated + copilotAppResult.eventsAggregated,
-          bucketsQueued: copilotResult.bucketsQueued + copilotAppResult.bucketsQueued,
-        };
-        if (copilotAppResult.dbErrors > 0) copilotLegacyHealthy = false;
-      } catch (err) {
-        copilotLegacyHealthy = false;
-        warnProviderParseFailure("Copilot App", err, opts);
+      for (const appDbPath of copilotAppDbPaths) {
+        const storePathKey = copilotPathKey(
+          path.join(path.dirname(appDbPath), "session-store.db"),
+        );
+        const observeOnly = canonicalCopilotStorePaths.has(storePathKey);
+        const catchupRelevant =
+          !observeOnly &&
+          (!copilotStoreWasActive || pendingCopilotStorePaths.has(storePathKey));
+        try {
+          const copilotAppResult = await parseCopilotAppDbIncremental({
+            dbPaths: [appDbPath],
+            cursors,
+            queuePath,
+            env: process.env,
+            observeOnly,
+            onProgress: (p) => {
+              if (!progress?.enabled) return;
+              const pct = p.total > 0 ? p.index / p.total : 1;
+              progress.update(
+                `Parsing Copilot App ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} sessions | buckets ${formatNumber(p.bucketsQueued)}`,
+              );
+            },
+          });
+          copilotResult = {
+            recordsProcessed:
+              copilotResult.recordsProcessed + copilotAppResult.recordsProcessed,
+            eventsAggregated:
+              copilotResult.eventsAggregated + copilotAppResult.eventsAggregated,
+            bucketsQueued:
+              copilotResult.bucketsQueued + copilotAppResult.bucketsQueued,
+          };
+          if (catchupRelevant && copilotAppResult.dbErrors > 0) {
+            copilotLegacyHealthy = false;
+          }
+        } catch (err) {
+          if (catchupRelevant) copilotLegacyHealthy = false;
+          warnProviderParseFailure("Copilot App", err, opts);
+        }
       }
     }
 
     if (
       copilotStoreWasActive &&
-      copilotStoreResult.adoptedThisRun &&
-      !copilotLegacyFrozen &&
-      copilotStoreResult.healthy === true &&
+      pendingCopilotStorePaths.size > 0 &&
       copilotLegacyHealthy &&
       cursors?.copilotStore
     ) {
       finalizeCopilotStoreLegacyCatchup({
-        dbPaths: copilotStorePaths,
+        dbPaths: Array.from(pendingCopilotStorePaths),
         cursors,
       });
     }
