@@ -346,6 +346,7 @@
   "settings.appearance.language.traditional_chinese": "중국어 번체",
   "settings.appearance.language.japanese": "일본어",
   "settings.appearance.language.korean": "한국어",
+  "settings.appearance.language.german": "독일어",
   "settings.appearance.currency.label": "통화",
   "settings.appearance.currency.hint": "사용량 비용에 표시할 통화를 선택하세요.",
   "settings.appearance.currency.opt.usd": "미국 달러 ($)",

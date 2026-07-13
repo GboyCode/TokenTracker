@@ -346,6 +346,7 @@
   "settings.appearance.language.traditional_chinese": "繁体字中国語",
   "settings.appearance.language.japanese": "日本語",
   "settings.appearance.language.korean": "韓国語",
+  "settings.appearance.language.german": "ドイツ語",
   "settings.appearance.currency.label": "通貨",
   "settings.appearance.currency.hint": "使用コストの表示通貨を選択します。",
   "settings.appearance.currency.opt.usd": "米ドル ($)",

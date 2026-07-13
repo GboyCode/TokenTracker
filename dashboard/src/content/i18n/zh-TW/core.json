@@ -361,6 +361,7 @@
   "settings.appearance.language.traditional_chinese": "繁體中文",
   "settings.appearance.language.japanese": "日語",
   "settings.appearance.language.korean": "韓語",
+  "settings.appearance.language.german": "德語",
   "settings.appearance.currency.label": "貨幣",
   "settings.appearance.currency.hint": "選擇用量成本的顯示幣種。",
   "settings.appearance.currency.opt.usd": "美元 ($)",

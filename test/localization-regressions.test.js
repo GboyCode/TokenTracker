@@ -206,3 +206,18 @@ test("zh locale uses reviewed natural copy for settings and dashboard", () => {
   assert.doesNotMatch(core, /顶级模特|转化次数|InsForge 可以摄取您的队列|斑点条纹和安静的日子一目了然/);
   assert.doesNotMatch(dashboard, /型号分解|动态的|复制的|编码剂|2025 包裹/);
 });
+
+test("language selector localizes the German option in every translated locale", () => {
+  const expectedLabels = {
+    zh: "德语",
+    "zh-TW": "德語",
+    ja: "ドイツ語",
+    ko: "독일어",
+    de: "Deutsch",
+  };
+
+  for (const [locale, expectedLabel] of Object.entries(expectedLabels)) {
+    const core = JSON.parse(read(`dashboard/src/content/i18n/${locale}/core.json`));
+    assert.equal(core["settings.appearance.language.german"], expectedLabel);
+  }
+});
