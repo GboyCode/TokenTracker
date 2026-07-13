@@ -42,17 +42,48 @@ export const DISC = {
   swirl: 2.6, // spiral sweep from rim to core — high enough that streams wrap into arms
   cameraZ: 17,
   cameraY: 7.0, // elevated eye point looking down at the disc center
+  cameraFov: 62,
   cameraDollyIn: 7, // extra distance the camera starts back at, for the entrance dolly
   cameraPushIn: 11, // how far the camera dives toward the core at full scroll progress
   introSeconds: 2.4, // entrance duration: streams grow from the chips into the core
   // Global orbital speed (rad/s): the whole system — orbs, their streams and
-  // the disc — slowly revolves together like a real galaxy (~4 min per turn).
+  // the disc — slowly revolves together like a real galaxy (~9 min per turn).
   orbitSpeed: 0.012,
+  // Compact screens need enough movement to communicate the orbit within a
+  // short mobile hero visit. One revolution takes roughly 45 seconds.
+  mobileOrbitSpeed: 0.14,
+  mobileCameraZ: 22,
+  mobileCameraY: 6,
+  mobileCameraFov: 92,
+  mobilePointScale: 1.45,
+  mobileLensScale: 1.45,
   // The canvas covers the whole hero viewport (so no container edge can ever
   // slice the galaxy); this world-space drop parks the complete disc — far
   // rim to near rim — inside the lower half of the frame.
   yOffset: -3.9,
 };
+
+export function orbitSpeedForViewport({ compactViewport }) {
+  return compactViewport ? DISC.mobileOrbitSpeed : DISC.orbitSpeed;
+}
+
+export function sceneConfigForViewport({ compactViewport }) {
+  return compactViewport
+    ? {
+        cameraFov: DISC.mobileCameraFov,
+        cameraY: DISC.mobileCameraY,
+        cameraZ: DISC.mobileCameraZ,
+        lensScale: DISC.mobileLensScale,
+        pointScale: DISC.mobilePointScale,
+      }
+    : {
+        cameraFov: DISC.cameraFov,
+        cameraY: DISC.cameraY,
+        cameraZ: DISC.cameraZ,
+        lensScale: 1,
+        pointScale: 1,
+      };
+}
 
 // Camera-frame extents at the disc plane (z=0) for slot → world conversion:
 // vertical half-extent from the camera fov/distance, horizontal via a 16:9
@@ -64,6 +95,7 @@ const FRAME_ASPECT = 1.78;
 // along it keeps every orb inside the frame forever — orbiting disc-plane
 // circles instead would fling the large-radius ones off screen.
 const ORB_RING = { cx: 50, cy: 43, rx: 40, ry: 34 };
+const MOBILE_ORB_RING = { cx: 50, cy: 50, rx: 41, ry: 15 };
 
 // Initial angle of each provider on the orbit, matching the designed slots.
 export function orbBaseAngles() {
@@ -72,10 +104,11 @@ export function orbBaseAngles() {
   );
 }
 
-export function orbScreenPos(theta, scale = 1.0) {
+export function orbScreenPos(theta, scale = 1.0, compactViewport = false) {
+  const ring = compactViewport ? MOBILE_ORB_RING : ORB_RING;
   return {
-    left: ORB_RING.cx + Math.cos(theta) * ORB_RING.rx * scale,
-    top: ORB_RING.cy - Math.sin(theta) * ORB_RING.ry * scale,
+    left: ring.cx + Math.cos(theta) * ring.rx * scale,
+    top: ring.cy - Math.sin(theta) * ring.ry * scale,
   };
 }
 
@@ -132,6 +165,8 @@ export const GALAXY_VERTEX = /* glsl */ `
   uniform vec3 uColorB;
   uniform vec3 uColorC;
   uniform float uProgress;
+  uniform float uLensScale;
+  uniform float uPointScale;
   attribute float aSeed;
   attribute float aPhase;
   attribute float aSize;
@@ -269,8 +304,8 @@ export const GALAXY_VERTEX = /* glsl */ `
     float r_cam = length(toParticle);
     float lensGlow = 0.0;
     if (r_cam > 0.001) {
-      float R_E = 1.35;
-      float R_horizon = 0.65;
+      float R_E = 1.35 * uLensScale;
+      float R_horizon = 0.65 * uLensScale;
       
       // Fade out particles that fall below the event horizon
       float horizonFade = smoothstep(0.2, R_horizon, r_cam);
@@ -297,7 +332,7 @@ export const GALAXY_VERTEX = /* glsl */ `
     
     // Scale particle sizes up based on lensing magnification
     sizeMultiplier *= 1.0 + clamp(lensGlow - 1.0, 0.0, 3.0) * 0.45;
-    gl_PointSize = aSize * uPixelRatio * (26.0 / dist) * depthK * (1.0 + (glow + lensGlow * 0.35) * 1.7) * sizeMultiplier;
+    gl_PointSize = aSize * uPixelRatio * uPointScale * (26.0 / dist) * depthK * (1.0 + (glow + lensGlow * 0.35) * 1.7) * sizeMultiplier;
 
     // Apply lensing color boost: blend into bright hot white/blue light at the Einstein Ring
     vColor = mix(mix(uColorA, uColorB, aSeed), uColorC, clamp(glow + lensGlow * 0.35, 0.0, 1.0) * 0.85);

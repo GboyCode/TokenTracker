@@ -10,7 +10,9 @@ import {
   computeAnchors,
   orbBaseAngles,
   orbScreenPos,
+  orbitSpeedForViewport,
   particleCounts,
+  sceneConfigForViewport,
   slotDepthFactor,
   staticChipPositions,
 } from "./galaxy-config.js";
@@ -124,6 +126,9 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
     }
 
     const lowPower = isLowPower();
+    const compactViewport = window.matchMedia?.("(max-width: 768px)")?.matches ?? false;
+    const orbitSpeed = orbitSpeedForViewport({ compactViewport });
+    const sceneConfig = sceneConfigForViewport({ compactViewport });
     const dpr = Math.min(window.devicePixelRatio || 1, lowPower ? 1.5 : 2);
     renderer.setPixelRatio(dpr);
     renderer.setClearColor(0x000000, 0);
@@ -132,8 +137,8 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
     mount.appendChild(canvas);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 120);
-    camera.position.set(0, 0, DISC.cameraZ);
+    const camera = new THREE.PerspectiveCamera(sceneConfig.cameraFov, 1, 0.1, 120);
+    camera.position.set(0, 0, sceneConfig.cameraZ);
 
     const anchors = computeAnchors();
     const geometry = buildGeometry(anchors, particleCounts({ lowPower }));
@@ -149,6 +154,8 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       uAnchors: { value: anchors.map((a) => new THREE.Vector3(a.x, a.y, a.z)) },
       uGlobalAlpha: { value: 0 },
       uProgress: { value: 0 },
+      uLensScale: { value: sceneConfig.lensScale },
+      uPointScale: { value: sceneConfig.pointScale },
       uColorA: { value: new THREE.Color(LV3_GL.accent) },
       uColorB: { value: new THREE.Color(LV3_GL.accentSoft) },
       uColorC: { value: new THREE.Color(LV3_GL.glint) },
@@ -268,7 +275,7 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       const progress = progressSmooth;
 
       uniforms.uTime.value = t;
-      uniforms.uOrbit.value = t * DISC.orbitSpeed;
+      uniforms.uOrbit.value = t * orbitSpeed;
       uniforms.uProgress.value = progress;
       fade = Math.min(1, fade + dt / 0.9);
       // Entrance: eased 0..1 sweep that grows the streams out of the chips
@@ -285,9 +292,11 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       camera.position.x = pointerSmooth.x * 1.8;
       // Elevated eye looking down at the vortex; scrolling dives it toward
       // the core (y sinks as z closes in).
-      camera.position.y = DISC.cameraY - pointerSmooth.y * 1.2 - progress * 4.5;
+      camera.position.y = sceneConfig.cameraY - pointerSmooth.y * 1.2 - progress * 4.5;
       camera.position.z =
-        DISC.cameraZ + (1 - introEase) * DISC.cameraDollyIn - progress * DISC.cameraPushIn;
+        sceneConfig.cameraZ +
+        (1 - introEase) * DISC.cameraDollyIn -
+        progress * DISC.cameraPushIn;
       // Keep galaxy visual center aligned to 68vh of the viewport dynamically
       const hView = window.innerHeight || 1;
       const v_camera = new THREE.Vector3(0, DISC.yOffset, 0);
@@ -322,7 +331,7 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
         const el = chipRefs.current[i];
         if (!el) continue;
         const theta = baseAngles[i] + uniforms.uOrbit.value;
-        const pos = orbScreenPos(theta, orbExplosionScale);
+        const pos = orbScreenPos(theta, orbExplosionScale, compactViewport);
         chipAnchorOnPlane(pos.left, pos.top, uniforms.uAnchors.value[i]);
         const x = (pos.left / 100) * lastW;
         const y = (pos.top / 100) * lastH;
@@ -376,7 +385,7 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       {/* Core convergence glow (both modes; the particles amplify it in full mode). */}
       <div
         ref={glowRef}
-        className="absolute left-1/2 top-[68vh] h-[28rem] w-[28rem] -translate-x-1/2 -translate-y-1/2 rounded-full opacity-45"
+        className="absolute left-1/2 top-[68vh] h-72 w-72 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-45 sm:h-[28rem] sm:w-[28rem]"
         style={{
           background:
             "radial-gradient(circle, var(--lv3-bg) 6%, rgba(138, 122, 255, 0.28) 18%, rgba(138, 122, 255, 0.05) 45%, transparent 68%)",
@@ -395,10 +404,11 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       {GALAXY_PROVIDERS.map((provider, i) => (
         <div
           key={provider}
+          data-provider-orb={provider}
           ref={(el) => {
             chipRefs.current[i] = el;
           }}
-          className="absolute left-0 top-0 hidden sm:flex h-12 w-12 items-center justify-center rounded-full border border-white/20"
+          className="absolute left-0 top-0 flex h-10 w-10 items-center justify-center rounded-full border border-white/20 sm:h-12 sm:w-12"
           style={{
             background: "var(--lv3-orb-surface)",
             boxShadow: "var(--lv3-orb-shadow)",
