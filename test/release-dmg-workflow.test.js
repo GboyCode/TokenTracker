@@ -131,6 +131,26 @@ test("release is created as a draft and only published after both builds", () =>
   );
 });
 
+test("published releases are immutable and builds use the version tag", () => {
+  const content = loadWorkflow();
+  assert.ok(
+    content.includes("ref: refs/tags/v${{ inputs.version }}"),
+    "macOS must build from the immutable version tag"
+  );
+  assert.ok(
+    content.includes("--json isDraft"),
+    "release state must be checked before draft reuse or asset upload"
+  );
+  assert.ok(
+    content.includes("Published assets are immutable"),
+    "an existing public release must fail instead of being reused"
+  );
+  assert.ok(
+    content.includes('tag_sha=$(git rev-list -n 1 "$tag")'),
+    "an existing draft tag must match the workflow commit"
+  );
+});
+
 test("homebrew tap is notified only after publish (not mid-build)", () => {
   const content = loadWorkflow();
   // The dispatch must come AFTER the un-draft, so the tap fetches a public,

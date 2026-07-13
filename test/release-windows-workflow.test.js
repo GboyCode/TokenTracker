@@ -113,6 +113,23 @@ test("workflow attaches the zip and the installer to a GitHub release", () => {
   assert.ok(content.includes("TokenTracker-Setup"), "installer asset");
 });
 
+test("Windows builds from the version tag and only uploads to a draft", () => {
+  const content = loadWorkflow();
+  assert.ok(
+    content.includes("ref: refs/tags/v${{ inputs.version }}"),
+    "Windows must build from the immutable version tag"
+  );
+  assert.ok(content.includes("--json isDraft"), "must inspect release draft state");
+  assert.ok(
+    content.includes("Published assets are immutable"),
+    "must reject public same-version releases"
+  );
+  assert.ok(
+    !/^\s*gh release create\b/m.test(content),
+    "standalone Windows workflow must never create a public release"
+  );
+});
+
 test("workflow uploads version-less assets only (no versioned duplicate)", () => {
   const content = loadWorkflow();
   // The gh release upload/create lines must reference the stable $zip / $setup

@@ -19,9 +19,11 @@ test("npm-publish workflow file exists", () => {
   assert.ok(fs.existsSync(WORKFLOW_PATH), "workflow file should exist");
 });
 
-test("workflow triggers on push to main", () => {
+test("workflow triggers only after canonical CI completes on main", () => {
   const content = loadWorkflow();
-  assert.ok(content.includes("push:"), "should trigger on push");
+  assert.ok(content.includes("workflow_run:"), "should trigger from workflow_run");
+  assert.ok(content.includes("workflows: [CI]"), "should depend on canonical CI");
+  assert.ok(content.includes("types: [completed]"), "should wait for CI completion");
   assert.ok(
     content.includes("branches: [main]"),
     "should target main branch only"
@@ -39,21 +41,16 @@ test("publish job builds/publishes on Node.js 20 to match the engines floor", ()
   );
 });
 
-test("tests gate the publish on a supported Node", () => {
+test("successful push CI gates publish and the exact tested SHA is checked out", () => {
   const content = loadWorkflow();
-  // The suite imports dashboard .ts files directly and loads undici 8, which
-  // need Node >=22.18; it cannot run on the Node 20 publish runtime. So a
-  // separate test job (Node 24) must pass before the publish job runs.
-  assert.ok(content.includes("needs: test"), "publish job must depend on the test job");
-  const testIdx = content.indexOf("\n  test:");
-  const publishIdx = content.indexOf("\n  publish:");
-  assert.ok(testIdx > 0 && testIdx < publishIdx, "test job should precede the publish job");
-  const testSection = content.slice(testIdx, publishIdx);
+  assert.ok(content.includes("workflow_run.conclusion == 'success'"));
+  assert.ok(content.includes("workflow_run.event == 'push'"));
+  assert.ok(content.includes("workflow_run.head_branch == 'main'"));
   assert.ok(
-    testSection.includes("node-version: 24"),
-    "test job should run on Node 24"
+    content.includes("ref: ${{ github.event.workflow_run.head_sha }}"),
+    "publish must build the exact commit that passed CI"
   );
-  assert.ok(testSection.includes("npm test"), "test job should run the suite");
+  assert.ok(!content.includes("\n  test:"), "must not maintain a weaker duplicate test job");
 });
 
 test("workflow sets npm registry URL", () => {

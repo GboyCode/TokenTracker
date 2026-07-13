@@ -1,7 +1,8 @@
 name: release Windows
 
 on:
-  # Manual one-off Windows-only release.
+  # Manual one-off Windows build. It may only attach assets to an existing draft
+  # created by release-dmg.yml; it can never create or mutate a public release.
   workflow_dispatch:
     inputs:
       version:
@@ -30,6 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: refs/tags/v${{ inputs.version }}
           # This job uploads assets via `gh` (GH_TOKEN), never authenticated git —
           # so don't persist the checkout token into local git config.
           persist-credentials: false
@@ -139,11 +141,10 @@ jobs:
           if (-not (Test-Path $setup)) { Write-Host "::error::installer not produced at $setup"; exit 1 }
           Write-Host "Installer built: $setup"
 
-      # 7. Attach BOTH the zip and the installer to the GitHub Release for this
-      # version. The macOS DMG workflow may have already created the `vX.Y.Z`
-      # release for the same version (CLI/macOS/Windows release together) — so
-      # upload-with-clobber if the release exists, otherwise create it.
-      - name: Create or update release
+      # 7. Attach BOTH assets to the draft created by release-dmg.yml. Published
+      # releases are immutable; a same-version rebuild must never replace assets
+      # already being served to users.
+      - name: Upload assets to existing draft release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -164,9 +165,15 @@ jobs:
           $zip = "TokenTracker-win-x64.zip"
           Copy-Item $setupBuilt $setup -Force
           Copy-Item $zipBuilt $zip -Force
-          gh release view $tag 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $zip $setup --clobber
-          } else {
-            gh release create $tag $zip $setup --title $tag --generate-notes
+          $releaseJson = gh release view $tag --json isDraft 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::Draft release $tag does not exist. Start the combined release workflow first."
+            exit 1
           }
+          $release = $releaseJson | ConvertFrom-Json
+          if (-not $release.isDraft) {
+            Write-Host "::error::Release $tag is already published. Published assets are immutable; bump the version instead."
+            exit 1
+          }
+          gh release upload $tag $zip $setup --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

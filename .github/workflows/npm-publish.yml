@@ -1,7 +1,11 @@
 name: npm publish
 
 on:
-  push:
+  # Publish only after the canonical CI workflow completes for the exact main
+  # commit. The former duplicate gate omitted validators and native checks.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
 
 concurrency:
@@ -9,48 +13,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Quality gate: tests must pass before we publish. Runs on Node 24 because the
-  # suite imports dashboard .ts files directly (native type stripping, Node
-  # 22.18+) and loads undici 8 (needs webidl.markAsUncloneable) — neither works
-  # on Node 20. The published package itself is built/published on Node 20 below.
-  test:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            dashboard/package-lock.json
-
-      - name: Install root dependencies
-        run: npm ci
-
-      - name: Install dashboard dependencies
-        run: npm ci --prefix dashboard
-
-      # The local-runtime install test asserts dashboard/dist/index.html exists.
-      - name: Build dashboard
-        env:
-          VITE_INSFORGE_BASE_URL: https://srctyff5.us-east.insforge.app
-          VITE_INSFORGE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTU2NzgtOTBhYi1jZGVmMTIzNDU2NzgiLCJlbWFpbCI6ImFub25AaW5zZm9yZ2UuY29tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExNDU5NDd9.T0auta_IrVIh0uXW1bob5QSnzvsnJmN28r5XkSGEuQY
-        run: npm run dashboard:build
-
-      - name: Run tests
-        run: npm test
-
   publish:
-    needs: test
+    # workflow_run can represent PR CI as well. Expose npm credentials only
+    # after a successful push CI run on main.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:
