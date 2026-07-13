@@ -149,6 +149,14 @@ test("published releases are immutable and builds use the version tag", () => {
     content.includes('tag_sha=$(git rev-list -n 1 "$tag")'),
     "an existing draft tag must match the workflow commit"
   );
+  assert.ok(
+    content.includes('repos/$GITHUB_REPOSITORY/git/refs'),
+    "the tag ref must be created explicitly before draft builders check it out"
+  );
+  assert.ok(
+    /gh release create[^\n]*--verify-tag[^\n]*--draft/.test(content),
+    "the draft must be created only after the immutable tag exists"
+  );
 });
 
 test("homebrew tap is notified only after publish (not mid-build)", () => {

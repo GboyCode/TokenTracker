@@ -75,17 +75,31 @@ jobs:
           set -euo pipefail
           tag="v$VERSION"
 
-          if release_json=$(gh release view "$tag" --json isDraft 2>/dev/null); then
+          if release_json=$(gh release view "$tag" --json isDraft,targetCommitish 2>/dev/null); then
             if [ "$(jq -r '.isDraft' <<<"$release_json")" != "true" ]; then
               echo "::error::Release $tag is already published. Published assets are immutable; bump the version instead."
               exit 1
             fi
 
-            git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
-            tag_sha=$(git rev-list -n 1 "$tag")
-            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
-              echo "::error::Draft $tag points to $tag_sha, but this workflow is running from $GITHUB_SHA. Re-run the original workflow or bump the version."
+            draft_sha=$(jq -r '.targetCommitish' <<<"$release_json")
+            if [ "$draft_sha" != "$GITHUB_SHA" ]; then
+              echo "::error::Draft $tag targets $draft_sha, but this workflow is running from $GITHUB_SHA. Re-run the original workflow or bump the version."
               exit 1
+            fi
+
+            # GitHub does not materialize the tag ref for a draft release until
+            # publication. Create it explicitly so parallel builders can check
+            # out the immutable tag while the release is still safely private.
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+              git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+              tag_sha=$(git rev-list -n 1 "$tag")
+              if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+                echo "::error::Tag $tag points to $tag_sha, not workflow commit $GITHUB_SHA."
+                exit 1
+              fi
+            else
+              gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+                -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" >/dev/null
             fi
             echo "Reusing draft $tag from immutable commit $GITHUB_SHA."
           else
@@ -96,10 +110,11 @@ jobs:
                 echo "::error::Tag $tag points to $tag_sha, not workflow commit $GITHUB_SHA."
                 exit 1
               fi
-              gh release create "$tag" --verify-tag --draft --title "$tag" --generate-notes
             else
-              gh release create "$tag" --target "$GITHUB_SHA" --draft --title "$tag" --generate-notes
+              gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+                -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" >/dev/null
             fi
+            gh release create "$tag" --verify-tag --draft --title "$tag" --generate-notes
           fi
 
   build:
