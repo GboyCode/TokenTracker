@@ -3729,7 +3729,11 @@ async function parseKiroIncremental({ dbPath, jsonlPath, cursors, queuePath, onP
         jsonl: { lastLine: jsonlResult.lineCount, updatedAt: new Date().toISOString() },
         updatedAt: new Date().toISOString(),
       };
-      return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+      return {
+        recordsProcessed: 0,
+        eventsAggregated: 0,
+        bucketsQueued: 0,
+      };
     }
   } else {
     return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
@@ -4212,7 +4216,11 @@ async function parseHermesIncremental({ hermesPath, dbPath, cursors, queuePath, 
     updatedAt, // Update the overall profile state timestamp even if the DB doesn't exist for the fast-path check
   };
 
-  return { recordsProcessed, eventsAggregated, bucketsQueued };
+  return {
+    recordsProcessed,
+    eventsAggregated,
+    bucketsQueued,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4993,7 +5001,11 @@ async function parseKiroCliFromSessionFiles({
       fileOffsets,
       updatedAt: new Date().toISOString(),
     };
-    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    return {
+      recordsProcessed: 0,
+      eventsAggregated: 0,
+      bucketsQueued: 0,
+    };
   }
 
   const hourlyState = normalizeHourlyState(cursors?.hourly);
@@ -5124,7 +5136,11 @@ async function parseKiroCliFromSessionFiles({
   cursors.hourly = hourlyState;
   cursors.kiroCli = { ...kiroCliState, seenIds: cappedSeen, fileOffsets, updatedAt };
 
-  return { recordsProcessed, eventsAggregated, bucketsQueued };
+  return {
+    recordsProcessed,
+    eventsAggregated,
+    bucketsQueued,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -9264,6 +9280,46 @@ function pickCopilotModel(attrs) {
 }
 
 const COPILOT_PARSER_VERSION = 2;
+const COPILOT_USAGE_CLAIM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const COPILOT_USAGE_CLAIM_MAX_ENTRIES = 10_000;
+
+function pruneCopilotUsageClaims(
+  events,
+  nowMs = Date.now(),
+  maxEntries = COPILOT_USAGE_CLAIM_MAX_ENTRIES,
+) {
+  const cutoffMs = nowMs - COPILOT_USAGE_CLAIM_RETENTION_MS;
+  const retained = [];
+  for (const event of Array.isArray(events) ? events : []) {
+    if (!event || typeof event !== "object" || event.consumed === true) {
+      continue;
+    }
+    const storedFirstSeenAtMs = Number(event.firstSeenAtMs);
+    const firstSeenAtMs =
+      Number.isFinite(storedFirstSeenAtMs) && storedFirstSeenAtMs > 0
+        ? storedFirstSeenAtMs
+        : nowMs;
+    if (firstSeenAtMs < cutoffMs) continue;
+    retained.push(
+      firstSeenAtMs === storedFirstSeenAtMs
+        ? event
+        : { ...event, firstSeenAtMs },
+    );
+  }
+  return retained.length > maxEntries
+    ? retained.slice(retained.length - maxEntries)
+    : retained;
+}
+
+function replaceCopilotUsageClaims(
+  target,
+  nowMs = Date.now(),
+  maxEntries = COPILOT_USAGE_CLAIM_MAX_ENTRIES,
+) {
+  if (!Array.isArray(target)) return;
+  const retained = pruneCopilotUsageClaims(target, nowMs, maxEntries);
+  target.splice(0, target.length, ...retained);
+}
 
 function isCopilotV1ChatSpan(record) {
   if (!record || record.type !== "span") return false;
@@ -9450,14 +9506,12 @@ async function parseCopilotIncremental({
       ? copilotState.fileOffsets
       : {};
   const fileOffsets = { ...fileOffsetsRaw };
-  const recentOtelUsageEvents = Array.isArray(copilotState.recentUsageEvents)
-    ? copilotState.recentUsageEvents.filter(
-        (event) =>
-          event &&
-          typeof event === "object" &&
-          event.consumed !== true,
-      )
-    : [];
+  const claimNowMs = Date.now();
+  const recentOtelUsageEvents = pruneCopilotUsageClaims(
+    copilotState.recentUsageEvents,
+    claimNowMs,
+  );
+  replaceCopilotUsageClaims(storeUsageEvents, claimNowMs, Infinity);
   const hadPriorUsageHistory =
     seenIds.size > 0 || Object.keys(fileOffsetsRaw).length > 0;
   let usageClaimsComplete =
@@ -9489,10 +9543,16 @@ async function parseCopilotIncremental({
       version: COPILOT_PARSER_VERSION,
       seenIds: Array.from(seenIds),
       fileOffsets,
+      recentUsageEvents: recentOtelUsageEvents,
       usageClaimsComplete,
       updatedAt: new Date().toISOString(),
     };
-    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    return {
+      recordsProcessed: 0,
+      eventsAggregated: 0,
+      bucketsQueued: 0,
+      usageClaims: recentOtelUsageEvents,
+    };
   }
 
   const hourlyState = normalizeHourlyState(cursors?.hourly);
@@ -9667,6 +9727,7 @@ async function parseCopilotIncremental({
         recentOtelUsageEvents.push({
           ...matchBase,
           input,
+          firstSeenAtMs: claimNowMs,
         });
       }
       if (dedupKey) seenIds.add(dedupKey);
@@ -9696,6 +9757,10 @@ async function parseCopilotIncremental({
   // Cap dedup set to last 10k IDs to bound state size
   const seenArr = Array.from(seenIds);
   const cappedSeen = seenArr.length > 10_000 ? seenArr.slice(seenArr.length - 10_000) : seenArr;
+  const retainedRecentOtelUsageEvents = pruneCopilotUsageClaims(
+    recentOtelUsageEvents,
+  );
+  replaceCopilotUsageClaims(storeUsageEvents, Date.now(), Infinity);
 
   const bucketsQueued = await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets });
   const updatedAt = new Date().toISOString();
@@ -9706,12 +9771,17 @@ async function parseCopilotIncremental({
     version: COPILOT_PARSER_VERSION,
     seenIds: cappedSeen,
     fileOffsets,
-    recentUsageEvents: recentOtelUsageEvents,
+    recentUsageEvents: retainedRecentOtelUsageEvents,
     usageClaimsComplete,
     updatedAt,
   };
 
-  return { recordsProcessed, eventsAggregated, bucketsQueued };
+  return {
+    recordsProcessed,
+    eventsAggregated,
+    bucketsQueued,
+    usageClaims: recentOtelUsageEvents,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -10108,7 +10178,7 @@ function parseCopilotStoreTokenDetails(raw) {
   return recognized > 0 ? totals : null;
 }
 
-function copilotStoreRecentEvent(row) {
+function copilotStoreRecentEvent(row, firstSeenAtMs = Date.now()) {
   const tsIso = parseCopilotAppTimestamp(row?.created_at);
   const tsMs = tsIso ? Date.parse(tsIso) : NaN;
   const sessionId =
@@ -10125,6 +10195,7 @@ function copilotStoreRecentEvent(row) {
     cacheWrite: normalized.cache_creation_input_tokens,
     reasoning: normalized.reasoning_output_tokens,
     tsMs,
+    firstSeenAtMs,
   };
 }
 
@@ -10227,19 +10298,17 @@ async function parseCopilotSessionStoreIncremental({
       ? excludeSessionTotalsOnFirstRun
       : {};
   const legacyResiduals = new Map();
-  const recentEvents = Array.isArray(storeState.recentEvents)
-    ? storeState.recentEvents.filter(
-        (event) =>
-          event &&
-          typeof event === "object" &&
-          event.consumed !== true,
-      )
-    : [];
+  const claimNowMs = Date.now();
+  const recentEvents = pruneCopilotUsageClaims(
+    storeState.recentEvents,
+    claimNowMs,
+  );
+  replaceCopilotUsageClaims(otelUsageEvents, claimNowMs, Infinity);
   const otelUsageMatcher = createCopilotStoreUsageMatcher(otelUsageEvents);
   const hourlyState = normalizeHourlyState(cursors?.hourly);
   const touchedBuckets = new Set();
   const cb = typeof onProgress === "function" ? onProgress : null;
-  const updatedAt = new Date().toISOString();
+  const updatedAt = new Date(claimNowMs).toISOString();
   let activeDbCount = 0;
   let adoptedThisRun = false;
   let recordsProcessed = 0;
@@ -10405,7 +10474,7 @@ async function parseCopilotSessionStoreIncremental({
         }
         const seedOnly =
           needsFingerprintSeed && rowId <= priorLastId;
-        const recentEvent = copilotStoreRecentEvent(row);
+        const recentEvent = copilotStoreRecentEvent(row, claimNowMs);
         if (pendingRetryIds.has(rowId) && !recentEvent) {
           if (seedOnly) {
             incrementCopilotFingerprintCount(
@@ -10596,7 +10665,7 @@ async function parseCopilotSessionStoreIncremental({
     active: canonicalActive,
     dbs: dbStates,
     seenSessions: Array.from(seenSessions),
-    recentEvents,
+    recentEvents: pruneCopilotUsageClaims(recentEvents),
     updatedAt,
   };
   return {
@@ -10608,6 +10677,7 @@ async function parseCopilotSessionStoreIncremental({
     eventsAggregated,
     bucketsQueued,
     dbErrors,
+    usageClaims: recentEvents,
   };
 }
 
@@ -12075,6 +12145,7 @@ module.exports = {
   zedInstallOwnsCursor,
   hermesInstallOwnsCursor,
   copilotOtelCursorHasLegacyCliUsage,
+  pruneCopilotUsageClaims,
   parseCopilotIncremental,
   parseCopilotSessionStoreIncremental,
   parseCopilotAppDbIncremental,

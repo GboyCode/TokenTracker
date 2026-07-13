@@ -1229,6 +1229,66 @@ test("canonical store mode skips CLI OTEL spans but keeps Chat extension records
   }
 });
 
+test("cmdSync canonical mode skips unmatchable CLI OTEL and keeps Chat records", async () => {
+  const seconds = 1_780_000_000;
+  const { dir, copilotHome, dbPath } = makeStoreDb();
+  try {
+    await withSyncHome(dir, async () => {
+      const args = ["--auto", "--from-retry", "--source=copilot"];
+      const trackerDir = path.join(dir, ".tokentracker", "tracker");
+      const queuePath = path.join(trackerDir, "queue.jsonl");
+      await cmdSync(args);
+
+      insertUsage(dbPath, {
+        id: 1,
+        session_id: "canonical-unmatchable-cli",
+        model: "gpt-5.6-luna",
+        input_tokens: 100,
+        output_tokens: 20,
+        token_details_json: tokenDetails({ input: 100, output: 20 }),
+        created_at: new Date(seconds * 1000).toISOString(),
+      });
+      const cliSpan = makeCliSpan({
+        sessionId: "canonical-unmatchable-cli",
+        model: "gpt-5.6-luna",
+        input: 100,
+        output: 20,
+        seconds,
+      });
+      delete cliSpan.attributes["gen_ai.conversation.id"];
+      const otelPath = path.join(copilotHome, "canonical.jsonl");
+      fs.writeFileSync(
+        otelPath,
+        [cliSpan, makeChatLogRecord({ seconds: seconds + 10 })]
+          .map(JSON.stringify)
+          .join("\n") + "\n",
+        "utf8",
+      );
+      process.env.COPILOT_OTEL_ENABLED = "true";
+      process.env.COPILOT_OTEL_EXPORTER_TYPE = "file";
+      process.env.COPILOT_OTEL_FILE_EXPORTER_PATH = otelPath;
+      await cmdSync(args);
+
+      const rows = readQueue(queuePath);
+      assert.equal(rows.length, 2);
+      assert.equal(
+        rows.reduce((sum, row) => sum + row.total_tokens, 0),
+        120 + 90,
+      );
+      assert.equal(
+        rows.filter((row) => row.model === "gpt-5.6-luna").length,
+        1,
+      );
+      assert.equal(
+        rows.filter((row) => row.model === "gpt-chat").length,
+        1,
+      );
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI OTEL splits cache writes and normalizes dotted Claude model IDs", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-otel-cache-test-"));
   try {
@@ -1424,20 +1484,36 @@ test("a delayed store row consumes an OTEL request counted on the previous sync"
   }
 });
 
-test("delayed OTEL and store claims are not truncated at ten thousand", async () => {
+test("delayed OTEL and store claims are migrated, expired, and bounded", async () => {
   const { dir, dbPath } = makeStoreDb();
   try {
-    const claims = Array.from({ length: 10_001 }, (_, index) => ({
-      sessionId: `claim-${index}`,
-      model: "gpt-5.6-luna",
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      reasoning: 0,
-      tsMs: 1_780_000_000_000 + index,
-    }));
+    const claims = [
+      {
+        sessionId: "expired-claim",
+        model: "gpt-5.6-luna",
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoning: 0,
+        tsMs: 1_780_000_000_000,
+        firstSeenAtMs: Date.now() - 8 * 24 * 60 * 60 * 1000,
+      },
+      ...Array.from({ length: 10_001 }, (_, index) => ({
+        sessionId: `claim-${index}`,
+        model: "gpt-5.6-luna",
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoning: 0,
+        tsMs: 1_780_000_000_001 + index,
+      })),
+    ];
     const storeQueue = path.join(dir, "store-queue.jsonl");
+    const transientOtelClaims = claims
+      .slice(1)
+      .map((claim) => ({ ...claim }));
     const storeCursors = {
       copilotStore: {
         active: true,
@@ -1449,8 +1525,22 @@ test("delayed OTEL and store claims are not truncated at ten thousand", async ()
       dbPath,
       cursors: storeCursors,
       queuePath: storeQueue,
+      otelUsageEvents: transientOtelClaims,
     });
-    assert.equal(storeCursors.copilotStore.recentEvents.length, 10_001);
+    assert.equal(storeCursors.copilotStore.recentEvents.length, 10_000);
+    assert.equal(
+      storeCursors.copilotStore.recentEvents.some(
+        (claim) => claim.sessionId === "expired-claim",
+      ),
+      false,
+    );
+    assert.equal(storeCursors.copilotStore.recentEvents[0].sessionId, "claim-1");
+    assert.ok(
+      storeCursors.copilotStore.recentEvents.every(
+        (claim) => Number.isFinite(claim.firstSeenAtMs),
+      ),
+    );
+    assert.equal(transientOtelClaims.length, 10_001);
 
     const otelPath = path.join(dir, "chat.jsonl");
     fs.writeFileSync(
@@ -1464,12 +1554,105 @@ test("delayed OTEL and store claims are not truncated at ten thousand", async ()
         recentUsageEvents: claims.map((claim) => ({ ...claim })),
       },
     };
+    const transientStoreClaims = claims
+      .slice(1)
+      .map((claim) => ({ ...claim }));
     await parseCopilotIncremental({
       otelPaths: [otelPath],
       cursors: otelCursors,
       queuePath: path.join(dir, "otel-queue.jsonl"),
+      storeUsageEvents: transientStoreClaims,
     });
-    assert.equal(otelCursors.copilot.recentUsageEvents.length, 10_001);
+    assert.equal(otelCursors.copilot.recentUsageEvents.length, 10_000);
+    assert.equal(
+      otelCursors.copilot.recentUsageEvents[0].sessionId,
+      "claim-1",
+    );
+    assert.ok(
+      otelCursors.copilot.recentUsageEvents.every(
+        (claim) => Number.isFinite(claim.firstSeenAtMs),
+      ),
+    );
+    assert.equal(transientStoreClaims.length, 10_001);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("same-run matching sees claims beyond the persisted cap", async () => {
+  const seconds = 1_780_000_000;
+  const target = {
+    sessionId: "oldest-transient-claim",
+    model: "gpt-5.6-luna",
+    input: 100,
+    output: 20,
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoning: 0,
+    tsMs: seconds * 1000,
+    firstSeenAtMs: Date.now(),
+  };
+  const fillers = Array.from({ length: 10_000 }, (_, index) => ({
+    sessionId: `transient-filler-${index}`,
+    model: "gpt-5.6-luna",
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoning: 0,
+    tsMs: seconds * 1000 + index + 1,
+    firstSeenAtMs: Date.now(),
+  }));
+  const { dir, dbPath } = makeStoreDb([
+    {
+      id: 1,
+      session_id: target.sessionId,
+      model: target.model,
+      input_tokens: 100,
+      output_tokens: 20,
+      token_details_json: tokenDetails({ input: 100, output: 20 }),
+      created_at: new Date(target.tsMs).toISOString(),
+    },
+  ]);
+  try {
+    const otelClaims = [
+      { ...target },
+      ...fillers.map((claim) => ({ ...claim })),
+    ];
+    const storeResult = await parseCopilotSessionStoreIncremental({
+      dbPath,
+      cursors: {},
+      queuePath: path.join(dir, "store-match-queue.jsonl"),
+      backfillOnFirstRun: true,
+      otelUsageEvents: otelClaims,
+    });
+    assert.equal(storeResult.eventsAggregated, 0);
+
+    const otelPath = path.join(dir, "transient-match.jsonl");
+    fs.writeFileSync(
+      otelPath,
+      JSON.stringify(
+        makeCliSpan({
+          sessionId: target.sessionId,
+          model: target.model,
+          input: 100,
+          output: 20,
+          seconds,
+        }),
+      ) + "\n",
+      "utf8",
+    );
+    const storeClaims = [
+      { ...target },
+      ...fillers.map((claim) => ({ ...claim })),
+    ];
+    const otelResult = await parseCopilotIncremental({
+      otelPaths: [otelPath],
+      cursors: {},
+      queuePath: path.join(dir, "otel-match-queue.jsonl"),
+      storeUsageEvents: storeClaims,
+    });
+    assert.equal(otelResult.eventsAggregated, 0);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -2010,7 +2193,7 @@ test("first adoption deduplicates a current CLI OTEL file against store history"
         fs.readFileSync(path.join(trackerDir, "cursors.json"), "utf8"),
       );
       assert.equal(cursors.copilotStore.dbs[dbPath].lastId, 1);
-      assert.equal(cursors.copilot.recentUsageEvents[0].consumed, true);
+      assert.equal(cursors.copilot.recentUsageEvents.length, 0);
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -2110,7 +2293,7 @@ test("App-owned adoption still consumes the matching CLI OTEL fingerprint", asyn
         fs.readFileSync(path.join(trackerDir, "cursors.json"), "utf8"),
       );
       assert.equal(cursors.copilotStore.dbs[dbPath].lastId, 1);
-      assert.equal(cursors.copilot.recentUsageEvents[0].consumed, true);
+      assert.equal(cursors.copilot.recentUsageEvents.length, 0);
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

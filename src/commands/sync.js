@@ -43,6 +43,7 @@ const {
   zedInstallOwnsCursor,
   hermesInstallOwnsCursor,
   copilotOtelCursorHasLegacyCliUsage,
+  pruneCopilotUsageClaims,
   parseCopilotIncremental,
   parseCopilotSessionStoreIncremental,
   parseCopilotAppDbIncremental,
@@ -1424,6 +1425,8 @@ async function cmdSync(argv) {
       }
     }
     let copilotLegacyHealthy = true;
+    let copilotOtelUsageClaims =
+      cursors?.copilot?.recentUsageEvents || [];
     let copilotStoreResult = {
       active: copilotStoreWasActive,
       healthy: false,
@@ -1432,6 +1435,7 @@ async function cmdSync(argv) {
       recordsProcessed: 0,
       eventsAggregated: 0,
       bucketsQueued: 0,
+      usageClaims: cursors?.copilotStore?.recentEvents || [],
     };
     if (copilotSourceAllowed && copilotStoreWasActive) {
       if (progress?.enabled) {
@@ -1498,7 +1502,11 @@ async function cmdSync(argv) {
           cursors,
           queuePath,
           env: process.env,
-          storeUsageEvents: cursors?.copilotStore?.recentEvents || [],
+          storeUsageEvents:
+            copilotStoreResult.usageClaims ||
+            cursors?.copilotStore?.recentEvents ||
+            [],
+          skipCliSpans: copilotStoreWasActive,
           onProgress: (p) => {
             if (!progress?.enabled) return;
             const pct = p.total > 0 ? p.index / p.total : 1;
@@ -1507,6 +1515,10 @@ async function cmdSync(argv) {
             );
           },
         });
+        copilotOtelUsageClaims =
+          copilotOtelResult.usageClaims ||
+          cursors?.copilot?.recentUsageEvents ||
+          [];
         copilotResult = mergeParseResult(copilotResult, copilotOtelResult);
       } catch (err) {
         copilotLegacyHealthy = false;
@@ -1668,11 +1680,24 @@ async function cmdSync(argv) {
           excludeSessionIdsOnFirstRun: appSessionIds,
           excludeSessionTotalsOnFirstRun: appSessionTotals,
           expectedFingerprints: copilotStoreAdoptionFingerprints,
-          otelUsageEvents: cursors?.copilot?.recentUsageEvents,
+          otelUsageEvents: copilotOtelUsageClaims,
         });
         copilotResult = mergeParseResult(copilotResult, copilotStoreResult);
       } catch (err) {
         warnProviderParseFailure("Copilot App/CLI session store", err, opts);
+      }
+    }
+
+    if (copilotSourceAllowed) {
+      if (Array.isArray(cursors?.copilot?.recentUsageEvents)) {
+        cursors.copilot.recentUsageEvents = pruneCopilotUsageClaims(
+          cursors.copilot.recentUsageEvents,
+        );
+      }
+      if (Array.isArray(cursors?.copilotStore?.recentEvents)) {
+        cursors.copilotStore.recentEvents = pruneCopilotUsageClaims(
+          cursors.copilotStore.recentEvents,
+        );
       }
     }
 
