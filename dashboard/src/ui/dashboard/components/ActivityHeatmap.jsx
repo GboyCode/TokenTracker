@@ -21,7 +21,7 @@ const HEATMAP_COLORS_LIGHT = [
 ];
 
 const HEATMAP_COLORS_DARK = [
-  "#30363d", // level 0 - inactive, GitHub-style neutral
+  "#121212", // level 0 - inactive, ultra-dark neutral for OLED-black integration
   "#065f46", // level 1
   "#059669", // level 2
   "#10b981", // level 3

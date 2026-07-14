@@ -164,7 +164,7 @@ internal sealed class PetWindow : Window
             // The WebView2 surface is rectangular even though most of it is transparent.
             // Keep only the lower centered sprite square mouse-active; clicks on the
             // bubble band or horizontal padding should pass through to whatever is behind.
-            double spriteSize = Math.Max(40, Math.Min(ActualWidth, ActualHeight - BubbleBand) - 8);
+            double spriteSize = SpriteSizeFor(ActualWidth, ActualHeight);
             double pad = Math.Max(8, spriteSize * 0.08);
             double left = (ActualWidth - spriteSize) / 2 - pad;
             double right = left + spriteSize + (pad * 2);
@@ -376,7 +376,7 @@ internal sealed class PetWindow : Window
                 // stutter. Using _isRevealed as the reference gives stable hysteresis:
                 // tucked → only the peek strip is "inside"; revealed → the full window is.
                 var wa = SystemParameters.WorkArea;
-                double leftX = _isRevealed ? wa.Right - Width : wa.Right - EdgePeek;
+                double leftX = _isRevealed ? wa.Right - Width : TuckedLeft(wa.Right);
                 double rightLimit = wa.Right + EdgeTolerance; // cursor clamps at the screen edge
                 inside = p.X >= leftX && p.X < rightLimit && p.Y >= tl.Y && p.Y < br.Y;
             }
@@ -637,6 +637,7 @@ internal sealed class PetWindow : Window
         var (w, h) = SizeDimensions(normalized);
         Width = w;
         Height = h;
+        if (_miniMode) ApplyEdgePlacement(animated: false);
         WriteSettings(s => s["PetSize"] = normalized);
     }
 
@@ -763,6 +764,18 @@ internal sealed class PetWindow : Window
     // before the taller band.
     private const double BubbleBand = 46;
 
+    // Keep the native edge geometry in lockstep with pet.jsx:sizeFor(). The window is
+    // wider than the sprite so the bubble has room; hiding the window by a fixed number
+    // of pixels would therefore hide only transparent horizontal padding.
+    private static double SpriteSizeFor(double width, double height) => Math.Max(
+        40,
+        Math.Min(width, height - BubbleBand) - 8);
+    private double SpriteSize => SpriteSizeFor(Width, Height);
+    private double SpriteLeftInset => (Width - SpriteSize) / 2;
+
+    private double TuckedLeft(double workAreaRight)
+        => workAreaRight - SpriteLeftInset - EdgePeek;
+
     private static (double Width, double Height) SizeDimensions(string size) => size switch
     {
         SizeSmall => (150, 138),
@@ -887,7 +900,7 @@ internal sealed class PetWindow : Window
         StopEdgeAnimation();
 
         var wa = SystemParameters.WorkArea;
-        double targetX = _isRevealed ? wa.Right - Width : wa.Right - EdgePeek;
+        double targetX = _isRevealed ? wa.Right - Width : TuckedLeft(wa.Right);
 
         if (!animated)
         {

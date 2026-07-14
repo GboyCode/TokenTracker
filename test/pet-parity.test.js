@@ -154,3 +154,44 @@ test("V2 look directions use the same 16-cell row mapping on web, macOS, and Win
   assert.match(windowsPetSource, /% 16/);
   assert.match(windowsPetSource, /pet:look/);
 });
+
+test("Windows edge tuck keeps the sprite visible instead of hiding window padding", () => {
+  // The tucked target must be based on the centered sprite's inset, not just
+  // `workArea.Right - EdgePeek` (which leaves only transparent padding visible).
+  assert.match(windowsPetSource, /private double SpriteLeftInset/);
+  assert.match(windowsPetSource, /private double TuckedLeft\(double workAreaRight\)/);
+  assert.match(
+    windowsPetSource,
+    /double leftX = _isRevealed \? wa\.Right - Width : TuckedLeft\(wa\.Right\)/,
+  );
+  assert.match(
+    windowsPetSource,
+    /double targetX = _isRevealed \? wa\.Right - Width : TuckedLeft\(wa\.Right\)/,
+  );
+
+  const edgePeek = 30;
+  for (const [width, height] of [[150, 138], [180, 162], [210, 194]]) {
+    const spriteSize = Math.max(40, Math.min(width, height - 46) - 8);
+    const spriteLeftInset = (width - spriteSize) / 2;
+    const tuckedLeft = 1920 - spriteLeftInset - edgePeek;
+    assert.equal(tuckedLeft + spriteLeftInset, 1920 - edgePeek);
+  }
+});
+
+test("macOS edge tuck keeps a visible handle and restores every preset", () => {
+  assert.match(macControllerSource, /private static let edgePeek: CGFloat = 48/);
+
+  const detect = macControllerSource.match(
+    /private func detectTuckedState\(_ panel: NSPanel\) \{[\s\S]*?\n    \}/,
+  )?.[0];
+  assert.ok(detect, "macOS tucked-state detection must remain explicit");
+  assert.match(detect, /if spriteRight > vf\.maxX/);
+  assert.match(detect, /else if spriteLeft < vf\.minX/);
+  assert.doesNotMatch(detect, /spriteCenter/);
+
+  // 48pt is deliberately larger than the smallest 60pt sprite frame, so the
+  // visible strip cannot consist only of the artboard's transparent edge.
+  for (const spriteWidth of [60, 84, 111]) {
+    assert.ok(48 < spriteWidth, `edge handle must fit inside ${spriteWidth}pt sprite`);
+  }
+});

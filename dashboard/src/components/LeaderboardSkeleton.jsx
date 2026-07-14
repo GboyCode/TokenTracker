@@ -66,13 +66,40 @@ function SkeletonRow({ index }) {
   );
 }
 
+function MobileSkeletonRow({ index }) {
+  const nameW = index < 3 ? "w-24" : index < 8 ? "w-20" : "w-16";
+  const pillCount = index % 3 === 0 ? 3 : index % 3 === 1 ? 2 : 1;
+  return (
+    <div className="mx-0 my-1 rounded-xl bg-white dark:bg-oai-gray-950 border border-oai-gray-100 dark:border-oai-gray-800/60 px-3.5 py-3 shadow-sm">
+      <div className="flex items-center gap-2.5">
+        <Bone className="h-4 w-3 shrink-0 rounded" />
+        <Bone className="h-9 w-9 shrink-0 rounded-full" />
+        <div className="min-w-0 flex-1">
+          <Bone className={cn("h-4", nameW)} />
+          <Bone className="mt-2 h-3.5 w-20" />
+        </div>
+        <div className="shrink-0 text-right">
+          <Bone className="ml-auto h-3 w-8" />
+          <Bone className="mt-1.5 ml-auto h-4 w-14" />
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-oai-gray-100 pt-2.5 dark:border-oai-gray-800/70">
+        {Array.from({ length: pillCount }, (_, i) => (
+          <Bone key={i} className="h-5 w-12 rounded-full" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Skeleton loader that mirrors the leaderboard table structure.
  * Renders `rows` shimmer rows with the same sticky columns and cell layout.
  */
 export function LeaderboardSkeleton({ rows = 10 }) {
   return (
-    <div className="w-full overflow-x-auto">
+    <>
+    <div className="hidden w-full overflow-x-auto sm:block">
       <table className="min-w-max w-full text-left text-sm">
         <thead className="border-b border-oai-gray-200 dark:border-oai-gray-800">
           <tr>
@@ -112,5 +139,11 @@ export function LeaderboardSkeleton({ rows = 10 }) {
         </tbody>
       </table>
     </div>
+    <div className="flex flex-col py-1 sm:hidden">
+      {Array.from({ length: rows }, (_, i) => (
+        <MobileSkeletonRow key={i} index={i} />
+      ))}
+    </div>
+    </>
   );
 }

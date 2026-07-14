@@ -99,6 +99,15 @@ function formatCost(value, currency, rate) {
   return `${symbol}${converted.toFixed(2)}`;
 }
 
+function formatCommunityTokens(value) {
+  const n = Number(value);
+  if (Number.isFinite(n) && Math.abs(n) >= 1_000_000_000_000) {
+    const trillions = Number((n / 1_000_000_000_000).toFixed(1));
+    return `${trillions}T`;
+  }
+  return formatCompactNumber(value);
+}
+
 // Total-tokens value: compact ("79.6B") on phones where the column is tight,
 // full grouped digits at sm+ where the wide table has room.
 function TotalTokens({ value }) {
@@ -117,7 +126,7 @@ function CommunityStatsChip({ communityStats, onClick }) {
     <button 
       type="button"
       onClick={onClick}
-      className="inline-flex h-9 items-center gap-2.5 rounded-full border border-oai-gray-200 dark:border-oai-gray-800 bg-oai-gray-50/50 dark:bg-white/[0.02] backdrop-blur-md px-3.5 select-none text-xs text-oai-gray-500 dark:text-oai-gray-400 hover:border-oai-brand-400 dark:hover:border-oai-brand-500/80 hover:bg-oai-brand-50/40 dark:hover:bg-oai-brand-950/20 transition-all duration-300 active:scale-[0.97] cursor-pointer"
+      className="inline-flex min-w-0 max-w-full flex-1 items-center gap-1.5 whitespace-nowrap rounded-xl border border-oai-gray-200 bg-oai-gray-50/50 px-2.5 py-2 text-xs text-oai-gray-500 backdrop-blur-md transition-all duration-300 hover:border-oai-brand-400 hover:bg-oai-brand-50/40 active:scale-[0.97] dark:border-oai-gray-800 dark:bg-white/[0.02] dark:text-oai-gray-400 dark:hover:border-oai-brand-500/80 dark:hover:bg-oai-brand-950/20 sm:h-9 sm:flex-none sm:gap-2.5 sm:rounded-full sm:px-3.5 sm:py-0"
       title={copy("leaderboard.community.view_stats")}
     >
       <span className="relative flex h-1.5 w-1.5 shrink-0" aria-hidden="true">
@@ -127,7 +136,8 @@ function CommunityStatsChip({ communityStats, onClick }) {
       
       <span className="flex items-center gap-1">
         <span className="font-semibold text-oai-black dark:text-white tabular-nums">
-          {Math.round(communityStats.tokenFloor).toLocaleString("en-US")}
+          <span className="sm:hidden">{formatCommunityTokens(communityStats.tokenFloor)}</span>
+          <span className="hidden sm:inline">{Math.round(communityStats.tokenFloor).toLocaleString("en-US")}</span>
         </span>
         <span className="text-[10px] text-oai-gray-400 dark:text-oai-gray-500">
           {copy("leaderboard.community.tokens_chip")}
@@ -138,7 +148,8 @@ function CommunityStatsChip({ communityStats, onClick }) {
 
       <span className="flex items-center gap-1">
         <span className="font-semibold text-oai-black dark:text-white tabular-nums">
-          {(Number(communityStats.totalEntries) || 0).toLocaleString("en-US")}
+          <span className="sm:hidden">{formatCompactNumber(communityStats.totalEntries)}</span>
+          <span className="hidden sm:inline">{(Number(communityStats.totalEntries) || 0).toLocaleString("en-US")}</span>
         </span>
         <span className="text-[10px] text-oai-gray-400 dark:text-oai-gray-500">
           {copy("leaderboard.community.devs_chip")}
@@ -164,6 +175,203 @@ function leaderboardTokenCells(entry, isMe, orderedColumns) {
       {toDisplayNumber(entry?.[col.key])}
     </td>
   ));
+}
+
+function providerNameFromColumn(column) {
+  if (column?.key === "gpt_tokens") return "CODEX";
+  if (column?.key === "claude_tokens") return "CLAUDE";
+  const fileName = column?.icon?.split("/").pop() || "";
+  return fileName.replace(/\.svg$/i, "").toUpperCase() || "OTHER";
+}
+
+const RANK_MEDAL_GLOW = {
+  1: "ring-2 ring-amber-400 dark:ring-amber-500/80 shadow-[0_0_8px_rgba(245,158,11,0.25)]",
+  2: "ring-2 ring-slate-350 dark:ring-slate-450 shadow-[0_0_8px_rgba(148,163,184,0.2)]",
+  3: "ring-2 ring-orange-400 dark:ring-orange-500/70 shadow-[0_0_8px_rgba(249,115,22,0.25)]",
+};
+
+function MobileRankCell({ rank, placeholder }) {
+  if (rank === 1) {
+    return (
+      <span className="text-base font-extrabold italic text-amber-500 dark:text-amber-400 tracking-tighter">
+        1
+      </span>
+    );
+  }
+  if (rank === 2) {
+    return (
+      <span className="text-base font-extrabold italic text-slate-400 dark:text-slate-350 tracking-tighter">
+        2
+      </span>
+    );
+  }
+  if (rank === 3) {
+    return (
+      <span className="text-base font-extrabold italic text-orange-500 dark:text-orange-400 tracking-tighter">
+        3
+      </span>
+    );
+  }
+  return (
+    <span className="text-[13px] font-bold tabular-nums text-oai-gray-400 dark:text-oai-gray-500">
+      {rank == null ? placeholder : `#${rank}`}
+    </span>
+  );
+}
+
+function MobileGithubBadge({ githubUrl }) {
+  return (
+    <a
+      href={githubUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      aria-label="GitHub profile"
+      className="absolute bottom-0 right-0 translate-x-1 translate-y-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-white dark:bg-oai-gray-950 text-oai-black dark:text-oai-gray-100 shadow border border-oai-gray-100 dark:border-oai-gray-800 transition-transform active:scale-110"
+    >
+      <ProviderIcon provider="GITHUB" size={11} />
+    </a>
+  );
+}
+
+function MobileProviderStats({ entry, orderedColumns }) {
+  const activeColumns = orderedColumns.filter((column) => {
+    const value = Number(entry?.[column.key]);
+    return Number.isFinite(value) && value > 0;
+  });
+
+  if (activeColumns.length === 0) return null;
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-1.5 gap-y-2 border-t border-oai-gray-100/70 pt-3 dark:border-oai-gray-800/60">
+      {activeColumns.map((column) => {
+        const label = copy(column.copyKey);
+        return (
+          <span
+            key={column.key}
+            title={label}
+            aria-label={`${label}: ${toDisplayNumber(entry?.[column.key])}`}
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-oai-gray-50/80 dark:bg-oai-gray-900/60 px-2 py-0.5 border border-oai-gray-100/80 dark:border-oai-gray-800/40 text-[10px] font-medium text-oai-gray-600 dark:text-oai-gray-300 transition-colors"
+          >
+            <ProviderIcon
+              provider={providerNameFromColumn(column)}
+              size={12}
+              className="shrink-0 opacity-90"
+            />
+            <span className="tabular-nums">{formatCompactNumber(entry?.[column.key])}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function MobileLeaderboardRow({
+  entry,
+  entryIdx,
+  name,
+  meLabel,
+  currency,
+  rate,
+  orderedColumns,
+  placeholder,
+  onOpenProfile,
+}) {
+  if (entry?.is_ellipsis) {
+    return (
+      <div
+        key={`mobile-ellipsis-${entryIdx}`}
+        aria-hidden="true"
+        className="px-4 py-2 text-center text-xs tracking-[0.4em] text-oai-gray-400 dark:text-oai-gray-600"
+      >
+        ···
+      </div>
+    );
+  }
+
+  const isMe = Boolean(entry?.is_me);
+  const isAnon = !isMe && isAnonymousName(entry?.display_name);
+  const profileUserId = typeof entry?.user_id === "string" ? entry.user_id : null;
+  const rowClickable = Boolean(profileUserId);
+  const rowName = isMe ? meLabel : name;
+  const handleRowKey = (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onOpenProfile(profileUserId);
+    }
+  };
+
+  return (
+    <div
+      key={`mobile-row-${entry?.rank}-${rowName}`}
+      role={rowClickable ? "button" : undefined}
+      tabIndex={rowClickable ? 0 : undefined}
+      onClick={rowClickable ? () => onOpenProfile(profileUserId) : undefined}
+      onKeyDown={rowClickable ? handleRowKey : undefined}
+      aria-label={rowClickable ? copy("leaderboard.profile_modal.row_aria", { name: rowName }) : undefined}
+      className={cn(
+        "relative mx-0 my-1 rounded-xl px-3.5 py-3 transition-all duration-200 border shadow-sm select-none",
+        isMe
+          ? "bg-gradient-to-br from-oai-brand-50/70 via-oai-brand-50/20 to-transparent dark:from-oai-brand-950/20 dark:via-oai-brand-950/5 dark:to-transparent border-oai-brand-200/60 dark:border-oai-brand-500/25"
+          : isAnon
+            ? "bg-white/90 dark:bg-oai-gray-950/90 border-oai-gray-100/70 dark:border-oai-gray-800/40"
+            : "bg-white dark:bg-oai-gray-950 border-oai-gray-100 dark:border-oai-gray-800/60",
+        rowClickable && "cursor-pointer hover:border-oai-gray-200 dark:hover:border-oai-gray-700/80 active:scale-[0.985] active:bg-oai-gray-50/60 dark:active:bg-oai-gray-900/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-oai-brand-500/60",
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="flex w-5 shrink-0 items-center justify-center">
+          <MobileRankCell rank={entry?.rank} placeholder={placeholder} />
+        </span>
+        <span className="relative inline-flex shrink-0">
+          <span
+            className={cn(
+              "inline-flex rounded-full p-0.5 transition-all duration-300",
+              RANK_MEDAL_GLOW[entry?.rank] || "ring-1 ring-oai-gray-200 dark:ring-oai-gray-800/80",
+              isAnon && "opacity-60 grayscale-[15%]"
+            )}
+          >
+            <LeaderboardAvatar
+              size="md"
+              avatarUrl={entry?.avatar_url}
+              displayName={rowName}
+              seed={leaderboardAvatarSeed(entry, rowName)}
+            />
+          </span>
+          {entry?.github_url && <MobileGithubBadge githubUrl={entry.github_url} />}
+        </span>
+        <div className="min-w-0 flex-1 pl-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className={cn(
+              "min-w-0 truncate text-sm tracking-tight",
+              isMe ? "font-semibold text-oai-black dark:text-oai-white" : isAnon ? "font-normal text-oai-gray-400 dark:text-oai-gray-500" : "font-medium text-oai-gray-800 dark:text-oai-gray-200",
+            )}>
+              {rowName}
+            </span>
+            <BadgeMini badges={entry?.badges} className="shrink-0 scale-95" />
+          </div>
+          <div className="mt-1 text-[11px] text-oai-gray-400 dark:text-oai-gray-500">
+            <span>{copy("leaderboard.column.est_cost")}</span>
+            <span className={cn("ml-1 tabular-nums font-medium", isAnon ? "text-oai-gray-400/80 dark:text-oai-gray-500/80" : "text-oai-gray-600 dark:text-oai-gray-300")}>
+              {formatCost(entry?.estimated_cost_usd, currency, rate)}
+            </span>
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          <div className="text-[9px] font-semibold uppercase tracking-[0.08em] text-oai-gray-400 dark:text-oai-gray-500">
+            {copy("leaderboard.column.total")}
+          </div>
+          <div className={cn(
+            "mt-0.5 text-sm font-semibold tabular-nums tracking-tight",
+            isMe ? "text-oai-black dark:text-oai-white" : isAnon ? "text-oai-gray-400 dark:text-oai-gray-500" : "text-oai-gray-800 dark:text-oai-gray-200",
+          )}>
+            <TotalTokens value={entry?.total_tokens} />
+          </div>
+        </div>
+      </div>
+      <MobileProviderStats entry={entry} orderedColumns={orderedColumns} />
+    </div>
+  );
 }
 
 const RANK_MEDAL = {
@@ -211,24 +419,12 @@ function isAnonymousName(value) {
   return normalized.toLowerCase() === "anonymous";
 }
 
-
 function leaderboardAvatarSeed(entry, displayName) {
   const id = typeof entry?.user_id === "string" ? entry.user_id.trim() : "";
   if (id) return id;
   return `${entry?.rank ?? ""}:${displayName}`;
 }
 
-/**
- * GitHub link rendered as an avatar-frame emblem: a small round chip centered
- * on the bottom edge of the avatar's frame ring (see the `relative` +
- * `rounded-full p-[2px]` wrapper in the row markup, which draws the ring when
- * a github_url is present). Expands into a tooltip on hover; the tooltip
- * carries a clickable "Settings" link so users who haven't configured their
- * own GitHub yet know where to turn it on. Uses a named Tailwind group
- * (`group/gh`) so hover state is scoped to this span — leaderboard rows
- * already have their own `group` for row-hover backgrounds and we don't want
- * to collide.
- */
 function GithubLinkWithTooltip({ githubUrl }) {
   return (
     <span className="absolute left-1/2 top-full -translate-x-1/2 -translate-y-1/2 inline-flex group/gh">
@@ -238,34 +434,12 @@ function GithubLinkWithTooltip({ githubUrl }) {
         rel="noopener noreferrer"
         onClick={(e) => e.stopPropagation()}
         aria-label={copy("leaderboard.github.aria")}
-        // The octocat glyph is itself a filled circle, so the chip needs no
-        // border of its own: the page-background disc just knocks a crisp
-        // 1px halo out of the avatar + frame ring behind it.
         className="flex h-4 w-4 items-center justify-center rounded-full bg-white dark:bg-oai-gray-950 text-oai-black dark:text-oai-gray-100 transition-transform hover:scale-110"
       >
         <ProviderIcon provider="GITHUB" size={14} />
       </a>
       <span
         role="tooltip"
-        // Render above the icon so the next row's sticky <td> can't cover the
-        // tooltip (later rows paint higher in the stacking order). left-0 keeps
-        // it inside the user column.
-        //
-        // CRITICAL for hover persistence:
-        //  1. NO margin between tooltip and icon. A margin is dead space — the
-        //     cursor leaves the group bounding box while traveling across it,
-        //     hover breaks, tooltip disappears mid-motion.
-        //  2. NO pointer-events-none on the tooltip. It's a descendant of the
-        //     group; :hover must reach it for group-hover to stay true.
-        //  3. ::before bridge extends the tooltip's hit-area down to the
-        //     icon's top edge so the cursor's path from icon up into the
-        //     tooltip text stays inside the group the whole time.
-        // left-0 so the tooltip grows rightward from the icon (icon sits
-        // between the avatar and the name, near the left edge of the sticky
-        // user column — growing leftward would exit the horizontal-scroll
-        // container and get clipped). mb-2 gives an 8px visual gap;
-        // ::before h-2.5 (10px) bridges it for hit-testing so the cursor
-        // never leaves the group while moving from icon into tooltip.
         className="invisible opacity-0 group-hover/gh:visible group-hover/gh:opacity-100 absolute left-0 bottom-full mb-2 whitespace-nowrap rounded-md bg-oai-black dark:bg-oai-gray-700 px-2.5 py-1.5 text-[11px] leading-relaxed text-white shadow-lg transition-opacity duration-150 z-50 before:content-[''] before:absolute before:inset-x-0 before:top-full before:h-2.5"
       >
         <span className="block">{copy("leaderboard.github.tooltipAction")}</span>
@@ -367,7 +541,6 @@ export function LeaderboardPage({
     return normalizePeriod(params.get("period")) || "total";
   }, [location?.search]);
 
-
   const handlePeriodChange = (nextPeriod) => {
     const normalized = normalizePeriod(nextPeriod);
     if (!normalized) return;
@@ -436,7 +609,6 @@ export function LeaderboardPage({
   });
 
   useEffect(() => {
-    // Mock leaderboard uses local getMockLeaderboard(); real data needs InsForge URL from getLeaderboardBaseUrl().
     if ((!leaderboardBaseUrl && !mockEnabled) || (!mockEnabled && leaderboardAccessMode === "unavailable")) {
       setListState({ loading: false, error: null, data: null, contextKey: null });
       return;
@@ -544,8 +716,6 @@ export function LeaderboardPage({
   const to = listData?.to || null;
   const generatedAt = listData?.generated_at || null;
 
-  // All-time community pulse for the title row (independent of the period
-  // filter); hidden entirely until the public fetch resolves.
   const communityStats = useCommunityStats();
   const me = listData?.me || null;
   const meLabel = copy("leaderboard.me_label");
@@ -605,8 +775,8 @@ export function LeaderboardPage({
         modifiers={[restrictToHorizontalAxis]}
         onDragEnd={handleDragEnd}
       >
-      <div className="w-full overflow-x-auto">
-        <table className="min-w-full sm:min-w-max w-full text-left text-sm">
+      <div className="hidden w-full overflow-x-auto sm:block">
+        <table className="min-w-full w-full text-left text-sm sm:min-w-max">
           <thead className="border-b border-oai-gray-200 dark:border-oai-gray-800">
             <tr>
               <th className={cn(LB_STICKY_TH_RANK, "text-[11px] font-semibold uppercase tracking-wider text-oai-gray-400 dark:text-oai-gray-500")}>
@@ -654,9 +824,6 @@ export function LeaderboardPage({
               const rawName = normalizeName(entry?.display_name);
               const entryName = isAnonymousName(rawName) ? anonLabel : rawName;
               const name = isMe ? meLabel : entryName;
-              // Every row with a user_id opens the profile modal. Private /
-              // anonymous targets resolve to an empty-state inside the modal
-              // ("profile not public") — better feedback than a dead click.
               const rowClickable = Boolean(profileUserId);
               const handleRowOpen = rowClickable ? () => openProfileModal(profileUserId) : undefined;
               const handleRowKey = rowClickable
@@ -691,11 +858,6 @@ export function LeaderboardPage({
                       rowClickable && "cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500/60",
                     )}
                   >
-                    {/* No position class on this td: cn() is tailwind-merge, so
-                        e.g. `relative` would silently drop lbStickyTdRank's
-                        `sticky` and this cell would scroll away on horizontal
-                        drag (issue 265). The sticky td is already positioned, which
-                        is all the pin stripe's before:absolute needs. */}
                     <td
                       className={cn(
                         lbStickyTdRank(true),
@@ -707,8 +869,6 @@ export function LeaderboardPage({
                     </td>
                     <td className={lbStickyTdUser(true)}>
                       <div className="flex min-w-0 items-center gap-2">
-                        {/* Both padding layers render for every row (framed or
-                            not) so avatars and names stay column-aligned */}
                         <span
                           className={cn(
                             "relative inline-flex shrink-0 rounded-full p-[2px]",
@@ -758,8 +918,6 @@ export function LeaderboardPage({
                   </td>
                   <td className={lbStickyTdUser(false)}>
                     <div className="flex min-w-0 items-center gap-2">
-                      {/* Both padding layers render for every row (framed or
-                          not) so avatars and names stay column-aligned */}
                       <span
                         className={cn(
                           "relative inline-flex shrink-0 rounded-full p-[2px]",
@@ -796,6 +954,26 @@ export function LeaderboardPage({
             })}
           </tbody>
         </table>
+      </div>
+      <div className="flex flex-col py-1.5 sm:hidden">
+        {displayEntries.map((entry, entryIdx) => {
+          const rawName = normalizeName(entry?.display_name);
+          const entryName = isAnonymousName(rawName) ? anonLabel : rawName;
+          return (
+            <MobileLeaderboardRow
+              key={`mobile-${entry?.rank ?? "ellipsis"}-${entryIdx}`}
+              entry={entry}
+              entryIdx={entryIdx}
+              name={entry?.is_me ? meLabel : entryName}
+              meLabel={meLabel}
+              currency={currency}
+              rate={rate}
+              orderedColumns={orderedColumns}
+              placeholder={placeholder}
+              onOpenProfile={openProfileModal}
+            />
+          );
+        })}
       </div>
       </DndContext>
     );
@@ -848,28 +1026,23 @@ export function LeaderboardPage({
     <div className="flex flex-col flex-1 text-oai-black dark:text-oai-white font-oai antialiased">
       <main className="flex-1 pt-8 sm:pt-10 pb-12 sm:pb-16">
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          {/* Title row gets its own row. */}
-          <div className="mb-5 sm:mb-6">
-            <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-oai-black dark:text-white mb-2 sm:mb-3">
+          <div className="mb-4 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3.5 sm:mb-8 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4">
+            <h1 className="col-start-1 row-start-1 min-w-0 whitespace-nowrap text-3xl font-semibold tracking-tight text-oai-black dark:text-white sm:col-span-2 sm:row-start-1 sm:text-4xl">
               {copy("leaderboard.title")}
             </h1>
-            <p className="text-oai-gray-500 dark:text-oai-gray-400 text-sm sm:text-base">
+            <p className="col-span-2 row-start-2 hidden text-sm text-oai-gray-500 dark:text-oai-gray-400 sm:block sm:row-start-2 sm:text-base">
               {period === "total"
                 ? copy("leaderboard.range.total")
                 : from && to
                   ? copy("leaderboard.range", { period: periodLabel, from, to })
                   : copy("leaderboard.range_loading", { period: periodLabel })}
               {generatedAt && (
-                <span className="ml-2 pl-2 border-l border-oai-gray-200 dark:border-oai-gray-800 hidden sm:inline-block text-oai-gray-400 dark:text-oai-gray-500 text-xs">
+                <span className="ml-2 hidden border-l border-oai-gray-200 pl-2 text-xs text-oai-gray-400 dark:border-oai-gray-800 dark:text-oai-gray-500 sm:inline-block">
                   {copy("leaderboard.generated_at", { ts: generatedAt })}
                 </span>
               )}
             </p>
-          </div>
-
-          {/* One row: period filter (left) + community status & me-chip (right). */}
-          <div className="mb-6 sm:mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="inline-flex h-9 p-1 border border-oai-gray-200 dark:border-oai-gray-800 rounded-full items-center relative self-start">
+            <div className="col-start-2 row-start-1 inline-flex h-9 shrink-0 items-center rounded-full border border-oai-gray-200 p-1 dark:border-oai-gray-800 sm:col-start-1 sm:row-start-3 sm:justify-self-start">
               {["week", "month", "total"].map((p) => {
                 const isActive = period === p;
                 return (
@@ -899,20 +1072,20 @@ export function LeaderboardPage({
               })}
             </div>
 
-            <div className="flex flex-row items-center gap-2.5 self-end sm:self-auto shrink-0 flex-wrap">
-              <CommunityStatsChip
-                communityStats={communityStats}
-                onClick={() => setIsStatsModalOpen(true)}
-              />
-              <LeaderboardMeChip
-                me={me}
-                totalEntries={totalEntries}
-                meLabel={meLabel}
-                onOpenProfile={me?.user_id ? () => openProfileModal(me.user_id) : undefined}
-                onJumpToMe={handleJumpToMe}
-                canJump={myPage != null && !onMyPage && !currentListState.loading}
-                className="shrink-0"
-              />
+            <div className="col-span-2 row-start-2 mb-0 flex w-full min-w-0 items-center justify-between sm:justify-end gap-2.5 sm:col-span-1 sm:col-start-2 sm:row-start-3 sm:mb-0 sm:w-auto sm:shrink-0">
+            <CommunityStatsChip
+              communityStats={communityStats}
+              onClick={() => setIsStatsModalOpen(true)}
+            />
+            <LeaderboardMeChip
+              me={me}
+              totalEntries={totalEntries}
+              meLabel={meLabel}
+              onOpenProfile={me?.user_id ? () => openProfileModal(me.user_id) : undefined}
+              onJumpToMe={handleJumpToMe}
+              canJump={myPage != null && !onMyPage && !currentListState.loading}
+              className="shrink-0"
+            />
             </div>
           </div>
 
@@ -941,7 +1114,7 @@ export function LeaderboardPage({
             </div>
           )}
 
-          <div className="rounded-xl border border-oai-gray-200 dark:border-oai-gray-800 overflow-hidden">
+          <div className="sm:rounded-xl sm:border sm:border-oai-gray-200 sm:dark:border-oai-gray-800 sm:overflow-hidden border-none bg-transparent">
             {currentListState.error && hasEntries ? (
               <div className="border-b border-oai-gray-200 dark:border-oai-gray-800 px-6 py-3">
                 <p className="text-sm text-red-500 dark:text-red-400">{currentListState.error}</p>
@@ -949,8 +1122,8 @@ export function LeaderboardPage({
             ) : null}
             {listBody}
 
-            <div className="px-6 py-3 border-t border-oai-gray-200 dark:border-oai-gray-800 flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
-              <div className="flex items-center gap-2 text-sm text-oai-gray-500 dark:text-oai-gray-400">
+            <div className="flex flex-col gap-3 sm:border-t border-oai-gray-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-end sm:gap-x-4 sm:px-6 dark:border-oai-gray-800 border-none mt-2.5 sm:mt-0">
+              <div className="flex items-center justify-between gap-2 text-sm text-oai-gray-500 dark:text-oai-gray-400 sm:justify-start">
                 <label htmlFor="leaderboard-page-size" className="whitespace-nowrap">
                   {copy("leaderboard.pagination.page_size_label")}
                 </label>
@@ -965,32 +1138,40 @@ export function LeaderboardPage({
                   className="px-3 py-1 text-oai-gray-700 dark:text-oai-gray-300"
                 />
               </div>
-              <div className="h-5 w-px bg-oai-gray-200 dark:bg-oai-gray-800" aria-hidden="true" />
-              <button
-                className={cn(
-                  "px-3 py-1.5 text-sm font-medium text-oai-gray-500 dark:text-oai-gray-400 rounded-md transition-colors",
-                  canPrev && !currentListState.loading
-                    ? "hover:bg-oai-gray-100 dark:hover:bg-oai-gray-800 hover:text-oai-black dark:hover:text-white"
-                    : "opacity-50 cursor-not-allowed"
-                )}
-                onClick={() => setListPage((p) => Math.max(1, p - 1))}
-                disabled={!canPrev || currentListState.loading}
-              >
-                {copy("leaderboard.pagination.prev")}
-              </button>
-              <div className="flex flex-wrap items-center gap-1">{pageButtons}</div>
-              <button
-                className={cn(
-                  "px-3 py-1.5 text-sm font-medium text-oai-gray-500 dark:text-oai-gray-400 rounded-md transition-colors",
-                  canNext && !currentListState.loading
-                    ? "hover:bg-oai-gray-100 dark:hover:bg-oai-gray-800 hover:text-oai-black dark:hover:text-white"
-                    : "opacity-50 cursor-not-allowed"
-                )}
-                onClick={() => setListPage((p) => p + 1)}
-                disabled={!canNext || currentListState.loading}
-              >
-                {copy("leaderboard.pagination.next")}
-              </button>
+              <div className="hidden h-5 w-px bg-oai-gray-200 dark:bg-oai-gray-800 sm:block" aria-hidden="true" />
+              <div className="flex w-full items-center justify-between sm:w-auto sm:justify-end gap-1.5">
+                <button
+                  className={cn(
+                    "whitespace-nowrap rounded-xl border border-oai-gray-100 bg-oai-gray-50/50 px-3.5 py-2 text-xs font-medium text-oai-gray-500 dark:border-oai-gray-800/80 dark:bg-white/[0.01] dark:text-oai-gray-400 transition-all duration-200 active:scale-[0.97] sm:rounded-md sm:border-0 sm:bg-transparent sm:px-3 sm:py-1.5 sm:text-sm sm:font-medium sm:active:scale-100",
+                    canPrev && !currentListState.loading
+                      ? "hover:bg-oai-gray-100 dark:hover:bg-oai-gray-800 hover:text-oai-black dark:hover:text-white"
+                      : "opacity-50 cursor-not-allowed"
+                  )}
+                  onClick={() => setListPage((p) => Math.max(1, p - 1))}
+                  disabled={!canPrev || currentListState.loading}
+                >
+                  {copy("leaderboard.pagination.prev")}
+                </button>
+                
+                <span className="text-xs font-semibold tabular-nums text-oai-gray-500 dark:text-oai-gray-455 px-2 sm:hidden">
+                  {currentPage} / {totalPages || "?"}
+                </span>
+
+                <div className="hidden sm:flex items-center gap-1">{pageButtons}</div>
+                
+                <button
+                  className={cn(
+                    "whitespace-nowrap rounded-xl border border-oai-gray-100 bg-oai-gray-50/50 px-3.5 py-2 text-xs font-medium text-oai-gray-500 dark:border-oai-gray-800/80 dark:bg-white/[0.01] dark:text-oai-gray-400 transition-all duration-200 active:scale-[0.97] sm:rounded-md sm:border-0 sm:bg-transparent sm:px-3 sm:py-1.5 sm:text-sm sm:font-medium sm:active:scale-100",
+                    canNext && !currentListState.loading
+                      ? "hover:bg-oai-gray-100 dark:hover:bg-oai-gray-800 hover:text-oai-black dark:hover:text-white"
+                      : "opacity-50 cursor-not-allowed"
+                  )}
+                  onClick={() => setListPage((p) => p + 1)}
+                  disabled={!canNext || currentListState.loading}
+                >
+                  {copy("leaderboard.pagination.next")}
+                </button>
+              </div>
             </div>
           </div>
         </div>

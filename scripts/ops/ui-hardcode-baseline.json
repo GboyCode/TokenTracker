@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-07-13T11:25:45.228Z",
+  "generatedAt": "2026-07-14T15:43:00.403Z",
   "root": "dashboard/src",
   "rules": {
     "colors": "hex/rgb(a) literals",
     "rawText": "JSX text nodes containing letters or digits"
   },
   "totals": {
-    "colors": 367,
-    "rawText": 183
+    "colors": 370,
+    "rawText": 186
   },
   "files": {
     "dashboard/src/components/InsforgeUserHeaderControls.jsx": {
@@ -109,6 +109,15 @@
         "for the header row, NOT the semantic",
         "setTimeout(r, 1500)); let dnsServers = []; for (let attempt = 0; attempt",
         "sidesteps all UA semantics. return ("
+      ]
+    },
+    "dashboard/src/pages/LeaderboardPage.jsx": {
+      "colors": 3,
+      "rawText": 3,
+      "rawTextTokens": [
+        "1",
+        "2",
+        "3"
       ]
     },
     "dashboard/src/pages/LeaderboardProfilePage.jsx": {

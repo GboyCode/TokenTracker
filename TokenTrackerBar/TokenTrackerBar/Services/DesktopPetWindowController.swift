@@ -25,7 +25,10 @@ final class DesktopPetWindowController: NSObject, NSWindowDelegate {
     /// to render in a clipped width and flicker.
     private static let bubbleMinWidth: CGFloat = 300
     /// How much of the *sprite* peeks out when tucked against an edge.
-    private static let edgePeek: CGFloat = 30
+    // Keep enough of the sprite's fixed artboard on-screen to leave a reliable
+    // visual + hover handle. Thirty points could land entirely in transparent
+    // artboard padding for the small preset or a sparse animation frame.
+    private static let edgePeek: CGFloat = 48
     /// A drag that ends within this distance of the left/right edge tucks the pet away.
     private static let snapMargin: CGFloat = 24
 
@@ -78,6 +81,9 @@ final class DesktopPetWindowController: NSObject, NSWindowDelegate {
         self.panel = panel
         uiState.isWindowVisible = true
         panel.orderFrontRegardless()
+        if hiddenEdge != nil {
+            applyEdgeFrame(animated: false)
+        }
         startLookTracking()
         UserDefaults.standard.set(true, forKey: Self.showDefaultsKey)
         keepActive()
@@ -183,6 +189,11 @@ final class DesktopPetWindowController: NSObject, NSWindowDelegate {
         // If the saved frame had it tucked against an edge, restore that tucked state
         // (so a hover still slides it out).
         detectTuckedState(panel)
+        if hiddenEdge != nil {
+            // Normalize frames saved by older builds whose 30pt peek could leave the
+            // visible portion entirely transparent.
+            applyEdgeFrame(animated: false)
+        }
         installDragMonitors(panel)
         updateBubbleAllowed()
         return panel
@@ -249,22 +260,14 @@ final class DesktopPetWindowController: NSObject, NSWindowDelegate {
             uiState.isRightEdge = true
             uiState.isTucked = true
             uiState.isSnapped = true
-            let targetX = vf.maxX - spriteLeftInset - Self.edgePeek
-            Task {
-                await animateWindowParabola(to: targetX, targetY: f.origin.y, duration: 0.35)
-                panel.saveFrame(usingName: Self.frameAutosaveName)
-            }
+            applyEdgeFrame(animated: true, saveFrameAfterAnimation: true)
         } else if spriteLeft <= vf.minX + Self.snapMargin {
             hiddenEdge = .left
             isRevealed = false
             uiState.isRightEdge = false
             uiState.isTucked = true
             uiState.isSnapped = true
-            let targetX = vf.minX + Self.edgePeek - (spriteLeftInset + spriteWidth)
-            Task {
-                await animateWindowParabola(to: targetX, targetY: f.origin.y, duration: 0.35)
-                panel.saveFrame(usingName: Self.frameAutosaveName)
-            }
+            applyEdgeFrame(animated: true, saveFrameAfterAnimation: true)
         } else {
             hiddenEdge = nil
             uiState.isTucked = false
@@ -293,10 +296,11 @@ final class DesktopPetWindowController: NSObject, NSWindowDelegate {
         guard let screen = panel.screen ?? NSScreen.main else { return }
         let vf = screen.visibleFrame
         let f = panel.frame
-        let spriteCenter = f.origin.x + spriteLeftInset + spriteWidth / 2
-        if spriteCenter > vf.maxX {
+        let spriteLeft = f.origin.x + spriteLeftInset
+        let spriteRight = spriteLeft + spriteWidth
+        if spriteRight > vf.maxX {
             hiddenEdge = .right; isRevealed = false; uiState.isTucked = true; uiState.isRightEdge = true; uiState.isSnapped = true
-        } else if spriteCenter < vf.minX {
+        } else if spriteLeft < vf.minX {
             hiddenEdge = .left; isRevealed = false; uiState.isTucked = true; uiState.isRightEdge = false; uiState.isSnapped = true
         } else {
             uiState.isTucked = false
@@ -308,8 +312,8 @@ final class DesktopPetWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Position the pet for its current `hiddenEdge` + `isRevealed` state.
-    private func applyEdgeFrame(animated: Bool) {
-        guard let panel, let screen = panel.screen, let edge = hiddenEdge else { return }
+    private func applyEdgeFrame(animated: Bool, saveFrameAfterAnimation: Bool = false) {
+        guard let panel, let screen = panel.screen ?? NSScreen.main, let edge = hiddenEdge else { return }
         let vf = screen.visibleFrame
         var f = panel.frame
         switch (edge, isRevealed) {
@@ -322,37 +326,21 @@ final class DesktopPetWindowController: NSObject, NSWindowDelegate {
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.22
                 panel.animator().setFrame(f, display: true)
-            } completionHandler: { [weak self] in
+            } completionHandler: { [weak self, weak panel] in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.uiState.isTucked = !self.isRevealed
+                    if saveFrameAfterAnimation {
+                        panel?.saveFrame(usingName: Self.frameAutosaveName)
+                    }
                 }
             }
         } else {
             panel.setFrame(f, display: true)
             uiState.isTucked = !isRevealed
-        }
-    }
-
-    private func animateWindowParabola(to targetX: CGFloat, targetY: CGFloat, duration: TimeInterval) async {
-        guard let panel else { return }
-        let startF = panel.frame
-        let startTime = Date()
-        let peakHeight: CGFloat = 40.0
-        
-        while true {
-            let elapsed = Date().timeIntervalSince(startTime)
-            let t = min(1.0, elapsed / duration)
-            let eased = t * (2 - t)
-            
-            let x = startF.origin.x + (targetX - startF.origin.x) * eased
-            let arc = -4 * peakHeight * t * (t - 1)
-            let y = startF.origin.y + (targetY - startF.origin.y) * eased - arc
-            
-            panel.setFrameOrigin(NSPoint(x: x, y: y))
-            
-            if t >= 1.0 { break }
-            try? await Task.sleep(nanoseconds: 16_000_000)
+            if saveFrameAfterAnimation {
+                panel.saveFrame(usingName: Self.frameAutosaveName)
+            }
         }
     }
 
