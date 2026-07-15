@@ -2579,14 +2579,18 @@ function createLocalApiHandler({ queuePath }) {
     if (p === "/functions/tokentracker-usage-limits") {
       const { getUsageLimits, resetUsageLimitsCache } = require("./usage-limits");
       try {
-        const forceRefresh = url.searchParams.get("refresh");
-        if (forceRefresh === "1" || forceRefresh === "true") {
+        const refreshParam = url.searchParams.get("refresh");
+        const forceRefresh = refreshParam === "1" || refreshParam === "true";
+        if (forceRefresh) {
           resetUsageLimitsCache();
         }
         const data = await getUsageLimits({
           home: os.homedir(),
           env: process.env,
           platform: process.platform,
+          // Punches through the Claude disk fresh-cache (but not the 429
+          // cooldown) — an explicit user refresh should hit upstream.
+          forceRefresh,
         });
         json(res, data);
       } catch (e) {

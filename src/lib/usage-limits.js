@@ -2823,6 +2823,7 @@ async function fetchUsageLimitsUncached({
   requestFn,
   now = new Date(),
   providerTimeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS,
+  forceRefresh = false,
 } = {}) {
   const nowMs = Date.now();
 
@@ -2870,11 +2871,14 @@ async function fetchUsageLimitsUncached({
   // Skip the upstream Claude call entirely while a 429 cooldown is active — calling again
   // just renews the penalty. The result handling below serves cache or a cooldown message.
   const claudeRetryAtMs = claudeToken ? readClaudeRateLimitRetryAtMs({ home, nowMs }) : null;
-  // Also avoid cross-process hammering after a recent successful read. The macOS app can
-  // restart its embedded Node server or force-refresh the limits page, both of which clear
-  // the in-memory cache; the disk cache keeps those paths from immediately spending
-  // another Claude OAuth usage request.
-  const freshClaudeCache = claudeToken ? readFreshClaudeLimitsCache({ home, nowMs }) : null;
+  // Also avoid cross-process hammering after a recent successful read: embedded-server
+  // restarts and background polls read the disk cache instead of spending another Claude
+  // OAuth usage request. An explicit user refresh (refresh=1 → forceRefresh) punches
+  // through this cache — but never through the 429 cooldown above, which is exactly the
+  // hammering the cooldown exists to prevent.
+  const freshClaudeCache = claudeToken && !forceRefresh
+    ? readFreshClaudeLimitsCache({ home, nowMs })
+    : null;
 
   const providerFetch = withFetchTimeout(fetchImpl, providerTimeoutMs);
   const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGo] = await Promise.all([

@@ -3051,7 +3051,7 @@ describe("getUsageLimits Claude stale fallback", () => {
     );
   }
 
-  function runLimits(tmp, claudeResponder) {
+  function runLimits(tmp, claudeResponder, extraOptions = {}) {
     return getUsageLimits({
       home: tmp,
       platform: "linux",
@@ -3066,6 +3066,7 @@ describe("getUsageLimits Claude stale fallback", () => {
         if (url === "https://api.anthropic.com/api/oauth/usage") return claudeResponder();
         return pendingUnlessCodexReset(url);
       },
+      ...extraOptions,
     });
   }
 
@@ -3156,6 +3157,89 @@ describe("getUsageLimits Claude stale fallback", () => {
       assert.equal(cached.claude.stale, false);
       assert.equal(cached.claude.five_hour.utilization, 22);
       assert.equal(cached.claude.seven_day.utilization, 44);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("forceRefresh punches through the fresh disk cache and hits upstream", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-force-refresh-"));
+    try {
+      makeClaudeHome(tmp);
+
+      let claudeCalls = 0;
+      const first = await runLimits(tmp, () => {
+        claudeCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            five_hour: { utilization: 22, resets_at: FUTURE_RESET },
+            seven_day: { utilization: 44, resets_at: FUTURE_RESET },
+            seven_day_opus: null,
+          }),
+        });
+      });
+      assert.equal(first.claude.five_hour.utilization, 22);
+      assert.equal(claudeCalls, 1);
+
+      // Simulates the refresh=1 path: in-memory cache cleared + forceRefresh.
+      resetUsageLimitsCache();
+      const refreshed = await runLimits(
+        tmp,
+        () => {
+          claudeCalls += 1;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              five_hour: { utilization: 33, resets_at: FUTURE_RESET },
+              seven_day: { utilization: 55, resets_at: FUTURE_RESET },
+              seven_day_opus: null,
+            }),
+          });
+        },
+        { forceRefresh: true },
+      );
+
+      assert.equal(claudeCalls, 2, "forceRefresh must bypass the fresh disk cache");
+      assert.equal(refreshed.claude.error, null);
+      assert.notEqual(refreshed.claude.stale, true);
+      assert.equal(refreshed.claude.five_hour.utilization, 33);
+      assert.equal(refreshed.claude.seven_day.utilization, 55);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("forceRefresh still honors an active 429 cooldown", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-force-cooldown-"));
+    try {
+      makeClaudeHome(tmp);
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(trackerDir, "claude-usage-rate-limit.json"),
+        JSON.stringify({ retry_at: new Date(Date.now() + 30 * 60 * 1000).toISOString() }),
+      );
+
+      let claudeCalls = 0;
+      const limited = await runLimits(
+        tmp,
+        () => {
+          claudeCalls += 1;
+          throw new Error("Claude endpoint must not be called during an active cooldown");
+        },
+        { forceRefresh: true },
+      );
+
+      assert.equal(claudeCalls, 0, "forceRefresh must never bypass the 429 cooldown");
+      assert.equal(limited.claude.configured, true);
+      assert.match(limited.claude.error, /rate limited \(429\)/);
     } finally {
       resetUsageLimitsCache();
       fs.rmSync(tmp, { recursive: true, force: true });
