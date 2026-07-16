@@ -101,6 +101,7 @@ final class StatusBarController: NSObject {
     }
 
     private func closePopoverIfShown() {
+        viewModel.setPopoverVisible(false)
         if popover.isShown {
             popover.performClose(nil)
         }
@@ -542,6 +543,7 @@ final class StatusBarController: NSObject {
     }
 
     private func handlePopoverDidClose() {
+        viewModel.setPopoverVisible(false)
         popoverAnchorWindow?.orderOut(nil)
         updateStatsDisplay()
     }
@@ -568,6 +570,7 @@ final class StatusBarController: NSObject {
 
         guard let anchorView = positionPopoverAnchorWindow(under: button) else { return }
         popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .minY)
+        viewModel.setPopoverVisible(true)
 
         // Keep keyboard focus inside the popover while it is visible.
         if let window = popover.contentViewController?.view.window {

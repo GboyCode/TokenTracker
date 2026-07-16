@@ -57,6 +57,7 @@ class DashboardViewModel: ObservableObject {
     @Published var error: String?
     @Published var serverOnline = false
     @Published var lastRefreshed: Date?
+    @Published private(set) var isPopoverVisible = false
 
     // Derived (cached) data
     @Published private(set) var fleetData: [FleetEntry] = []
@@ -90,6 +91,11 @@ class DashboardViewModel: ObservableObject {
     var totalCost: String { TokenFormatter.formatCostFromString(totalSummary?.totals.totalCostUsd) }
 
     // MARK: - Period Switching
+
+    func setPopoverVisible(_ isVisible: Bool) {
+        guard isPopoverVisible != isVisible else { return }
+        isPopoverVisible = isVisible
+    }
 
     func switchPeriod(_ newPeriod: DateHelpers.Period) {
         guard newPeriod != period else { return }

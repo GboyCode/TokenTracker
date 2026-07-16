@@ -263,7 +263,10 @@ struct ClawdCompanionView: View {
     // MARK: - Sync Button
 
     private var syncButton: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !syncSpinActive)) { timeline in
+        TimelineView(.animation(
+            minimumInterval: 1.0 / 30.0,
+            paused: !syncSpinActive || !viewModel.isPopoverVisible
+        )) { timeline in
             Image(systemName: "arrow.triangle.2.circlepath")
                 .font(.system(size: 11))
                 .foregroundStyle(viewModel.isSyncing ? .tertiary : (hoveringSync ? .primary : .secondary))
@@ -365,7 +368,7 @@ struct ClawdCompanionView: View {
                 PetAtlasSpriteView(
                     character: activeCharacter,
                     state: clawdState,
-                    isVisible: layout != .floating || petState.isWindowVisible,
+                    isVisible: isCharacterTimelineVisible,
                     lookDirectionIndex: hoverDirectionIndex ?? (layout == .floating ? petState.lookDirectionIndex : nil)
                 )
             }
@@ -440,10 +443,24 @@ struct ClawdCompanionView: View {
     }
 
     private var characterTimelinePaused: Bool {
-        if layout == .floating, !petState.isWindowVisible {
-            return true
-        }
-        return clawdState == .miniIdle
+        CompanionAnimationPolicy.shouldPauseTimeline(
+            surface: animationSurface,
+            isPopoverVisible: viewModel.isPopoverVisible,
+            isFloatingPetVisible: petState.isWindowVisible,
+            isStaticFrame: clawdState == .miniIdle
+        )
+    }
+
+    private var isCharacterTimelineVisible: Bool {
+        CompanionAnimationPolicy.isVisible(
+            surface: animationSurface,
+            isPopoverVisible: viewModel.isPopoverVisible,
+            isFloatingPetVisible: petState.isWindowVisible
+        )
+    }
+
+    private var animationSurface: CompanionAnimationPolicy.Surface {
+        layout == .dashboard ? .popover : .floatingPet
     }
 
     private var characterFrameInterval: TimeInterval {
