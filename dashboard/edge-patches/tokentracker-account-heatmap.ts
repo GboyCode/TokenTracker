@@ -103,6 +103,11 @@ interface GroupedRow {
   conversations: number | null;
 }
 
+const GROUPED_ROWS_TTL_MS = 30_000;
+const GROUPED_ROWS_STALE_IF_ERROR_MS = 5 * 60_000;
+const groupedRowsCache = new Map<string, { fetchedAt: number; rows: GroupedRow[] }>();
+const groupedRowsInFlight = new Map<string, Promise<GroupedRow[]>>();
+
 /**
  * Server-side aggregation. One RPC replaces the old N paginated 1000-row raw
  * fetches: account_usage_grouped() GROUPs BY (tz-local bucket, source, model)
@@ -122,17 +127,39 @@ async function fetchGroupedRows(
   tz: string | null,
   tzOffsetMinutes: number | null,
 ): Promise<GroupedRow[]> {
-  const { data, error } = await client.database.rpc("account_usage_grouped_v2", {
-    p_user_id: userId,
-    p_device_id: requestedDeviceId,
-    p_from: fromIso,
-    p_to: toIso,
-    p_trunc: trunc,
-    p_tz: tz,
-    p_offset_min: tzOffsetMinutes,
-  });
-  if (error) throw new Error(error.message);
-  return (Array.isArray(data) ? data : []) as GroupedRow[];
+  const cacheKey = JSON.stringify([userId, requestedDeviceId, fromIso, toIso, trunc, tz, tzOffsetMinutes]);
+  const cached = groupedRowsCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < GROUPED_ROWS_TTL_MS) return cached.rows;
+  const existing = groupedRowsInFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const pending = (async () => {
+    try {
+      const { data, error } = await client.database.rpc("account_usage_grouped_v2", {
+        p_user_id: userId,
+        p_device_id: requestedDeviceId,
+        p_from: fromIso,
+        p_to: toIso,
+        p_trunc: trunc,
+        p_tz: tz,
+        p_offset_min: tzOffsetMinutes,
+      });
+      if (error) throw new Error(error.message);
+      const rows = (Array.isArray(data) ? data : []) as GroupedRow[];
+      groupedRowsCache.set(cacheKey, { fetchedAt: Date.now(), rows });
+      if (groupedRowsCache.size > 64) {
+        const oldest = groupedRowsCache.keys().next().value;
+        if (oldest) groupedRowsCache.delete(oldest);
+      }
+      return rows;
+    } catch (error) {
+      const stale = groupedRowsCache.get(cacheKey);
+      if (stale && Date.now() - stale.fetchedAt < GROUPED_ROWS_STALE_IF_ERROR_MS) return stale.rows;
+      throw error;
+    }
+  })().finally(() => groupedRowsInFlight.delete(cacheKey));
+  groupedRowsInFlight.set(cacheKey, pending);
+  return pending;
 }
 
 export default async function (req: Request): Promise<Response> {

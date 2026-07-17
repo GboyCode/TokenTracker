@@ -26,6 +26,12 @@ test("cloud account reads use one database RPC instead of a device lookup plus a
       /\.from\("tokentracker_devices"\)/u,
       `${file} must not spend a second PostgREST connection resolving devices`,
     );
+    assert.match(source, /const groupedRowsInFlight = new Map/u,
+      `${file} must coalesce identical concurrent RPC reads`);
+    assert.match(source, /GROUPED_ROWS_TTL_MS = 30_000/u,
+      `${file} must shield the backend from old-client polling storms`);
+    assert.match(source, /GROUPED_ROWS_STALE_IF_ERROR_MS = 5 \* 60_000/u,
+      `${file} must retain a bounded stale fallback for transient 5xx responses`);
   }
 });
 
