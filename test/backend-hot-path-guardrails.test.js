@@ -17,10 +17,11 @@ const ACCOUNT_FUNCTIONS = [
   "tokentracker-account-model-breakdown.ts",
 ];
 
-test("cloud account reads use one database RPC instead of a device lookup plus aggregation", () => {
+test("cloud account reads use the shared cached RPC instead of a device lookup plus aggregation", () => {
   for (const file of ACCOUNT_FUNCTIONS) {
     const source = read(`dashboard/edge-patches/${file}`);
-    assert.match(source, /rpc\("account_usage_grouped_v2"/u, `${file} must use the one-call RPC`);
+    assert.match(source, /rpc\("account_usage_grouped_cached"/u,
+      `${file} must use the cross-isolate cached RPC`);
     assert.doesNotMatch(
       source,
       /\.from\("tokentracker_devices"\)/u,
@@ -33,6 +34,19 @@ test("cloud account reads use one database RPC instead of a device lookup plus a
     assert.match(source, /GROUPED_ROWS_STALE_IF_ERROR_MS = 5 \* 60_000/u,
       `${file} must retain a bounded stale fallback for transient 5xx responses`);
   }
+});
+
+test("shared account cache is bounded, locked per key, and access controlled", () => {
+  const source = read("migrations/20260718071507_add-shared-account-usage-cache.sql");
+  assert.match(source, /CREATE UNLOGGED TABLE public\.tokentracker_account_usage_cache/u);
+  assert.match(source, /CREATE OR REPLACE FUNCTION public\.account_usage_grouped_cached/u);
+  assert.match(source, /interval '30 seconds'/u);
+  assert.match(source, /pg_advisory_xact_lock\(hashtextextended\(v_cache_key, 0\)\)/u);
+  assert.match(source, /public\.account_usage_grouped_v2\(/u);
+  assert.match(source, /LIMIT 256/u);
+  assert.match(source, /ENABLE ROW LEVEL SECURITY/u);
+  assert.match(source, /REVOKE ALL ON public\.tokentracker_account_usage_cache FROM PUBLIC, anon, authenticated/u);
+  assert.match(source, /REVOKE ALL ON FUNCTION public\.account_usage_grouped_cached/u);
 });
 
 test("leaderboard refresh fetches all user metadata with one RPC", () => {
