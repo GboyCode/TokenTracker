@@ -6,6 +6,7 @@ import { useTheme } from "../../../hooks/useTheme.js";
 import { useCurrency } from "../../../hooks/useCurrency.js";
 import { useTokenFormat } from "../../../hooks/useTokenFormat.js";
 import { formatUsdCurrency } from "../../../lib/format";
+import { TOKEN_FORMAT_MODES } from "../../../lib/token-format.js";
 import { ActivityHeatmap3D, PALETTES, getAITooltipMessage } from "./ActivityHeatmap3D";
 import { Maximize2, RotateCcw, X, Flame, Terminal, TrendingUp, Info, Play, Pause } from "lucide-react";
 
@@ -398,6 +399,8 @@ export function ActivityHeatmap({
     () => formatUsdCurrency(stats.totalCostUsd, { currency, rate }),
     [stats.totalCostUsd, currency, rate],
   );
+  const formatModalTokens = (value) =>
+    formatTokens(value, { mode: TOKEN_FORMAT_MODES.COMPACT, decimals: 2 });
 
   const dayLabels =
     weekStartsOn === "mon"
@@ -649,7 +652,7 @@ export function ActivityHeatmap({
                   </span>
                   <div className="flex items-baseline gap-1.5">
                     <span className="text-xl font-black text-zinc-900 dark:text-zinc-50 tracking-tight font-mono transition-transform duration-200 group-hover:-translate-y-[1px]">
-                      {formatTokens(stats.totalTokens, { decimals: 2 })}
+                      {formatModalTokens(stats.totalTokens)}
                     </span>
                     
                     {/* Compact Trend Line */}
@@ -716,7 +719,7 @@ export function ActivityHeatmap({
                   </span>
                   <span className="text-xl font-black text-zinc-900 dark:text-zinc-50 tracking-tight font-mono transition-transform duration-200 group-hover:-translate-y-[1px]">
                     {stats.maxSingleDay.value > 0
-                      ? formatTokens(stats.maxSingleDay.value, { decimals: 2 })
+                      ? formatModalTokens(stats.maxSingleDay.value)
                       : copy("heatmap.3d.modal.stats.no_data")}{" "}
                     <span className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 font-mono">
                       ({stats.maxSingleDay.day || copy("heatmap.3d.modal.stats.no_data")})

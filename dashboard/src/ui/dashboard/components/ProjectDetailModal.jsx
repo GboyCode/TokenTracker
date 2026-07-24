@@ -7,6 +7,10 @@ import { useTokenFormat } from "../../../hooks/useTokenFormat.js";
 import { formatProviderDisplayName } from "../../../lib/provider-display";
 import { useProjectUsageDetail } from "../../../hooks/use-project-usage-detail";
 import { getLocalDayKey } from "../../../lib/timezone";
+import {
+  TOKEN_FORMAT_MODES,
+  TokenFormatModeOverride,
+} from "../../foundation/TokenFormatProvider.jsx";
 import { ProviderIcon } from "./ProviderIcon";
 import { TrendMonitor, getModelColor } from "./TrendMonitor.jsx";
 import {
@@ -114,7 +118,7 @@ function SectionLabel({ children }) {
   );
 }
 
-export function ProjectDetailModal({ entry, query = {}, onClose }) {
+function ProjectDetailModalContent({ entry, query = {}, onClose }) {
   const [isClosing, setIsClosing] = React.useState(false);
   const projectKey = typeof entry?.project_key === "string" ? entry.project_key : "";
   const { owner, repo } = splitProjectKey(projectKey);
@@ -439,5 +443,13 @@ export function ProjectDetailModal({ entry, query = {}, onClose }) {
         </div>
       </div>
     </div>
+  );
+}
+
+export function ProjectDetailModal(props) {
+  return (
+    <TokenFormatModeOverride mode={TOKEN_FORMAT_MODES.COMPACT}>
+      <ProjectDetailModalContent {...props} />
+    </TokenFormatModeOverride>
   );
 }

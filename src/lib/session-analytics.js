@@ -15,7 +15,14 @@ const { computeRowCost } = require("./pricing");
 
 // Bump the sidecar when derived metrics change so cached rows are rebuilt
 // instead of leaving the dashboard on the previous (over-counted) heuristic.
-const SIDECAR_VERSION = 6;
+// v7 adds the raw session_id (local-only, needed to build resume commands for
+// the session browser); it never leaves the Node process through the cloud.
+// v8 adds an agent-authored one-line title: Claude's "ai-title" session-log
+// record and Codex's thread_name from session_index.jsonl. Both are metadata
+// the agent wrote itself, never the raw prompt body, and stay local-only
+// alongside session_id (no self-parsed prompt fallback, so the strict
+// metadata-only guarantee holds).
+const SIDECAR_VERSION = 8;
 const EDIT_TOOLS = new Set(["apply_patch", "edit", "write", "multiedit", "notebookedit"]);
 const PLACEHOLDER_MODELS = new Set(["<synthetic>", "synthetic", "<unknown>", "unknown"]);
 const CLAUDE_MEM_OBSERVER_PROJECT_SUFFIX = "--claude-mem-observer-sessions";
@@ -103,6 +110,17 @@ function promptFingerprint(prompt) {
   return crypto.createHash("sha256").update(prompt.replace(/\s+/g, " ")).digest("hex");
 }
 
+// Normalize a session title into a single short line. Titles come ONLY from
+// the agent's own metadata (Claude's ai-title, Codex's thread_name) — never
+// the raw prompt body — so the metadata-only privacy guarantee holds. They
+// stay local-only alongside session_id.
+function cleanSessionTitle(value) {
+  if (typeof value !== "string") return null;
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return text.length > 120 ? `${text.slice(0, 117).trimEnd()}…` : text;
+}
+
 function extractCodexPrompt(obj) {
   if (obj?.type !== "event_msg" || obj.payload?.type !== "user_message") return null;
   if (typeof obj.payload.message === "string") {
@@ -171,6 +189,7 @@ async function scanClaudeSession(filePath) {
   let rawSessionId = path.basename(filePath, ".jsonl");
   let cwd = null;
   let model = "unknown";
+  let aiTitle = null;
   let turns = 0;
   let editTurns = 0;
   let retryTurns = 0;
@@ -192,6 +211,13 @@ async function scanClaudeSession(filePath) {
     updateBounds(bounds, obj.timestamp || obj.message?.timestamp);
     if (typeof obj.sessionId === "string" && obj.sessionId) rawSessionId = obj.sessionId;
     if (typeof obj.cwd === "string" && obj.cwd) cwd = obj.cwd;
+    // Claude writes its own generated one-line summary as an "ai-title" record.
+    // It is agent-authored metadata (not the raw prompt body); keep the latest.
+    if (obj.type === "ai-title" && typeof obj.aiTitle === "string") {
+      const cleaned = cleanSessionTitle(obj.aiTitle);
+      if (cleaned) aiTitle = cleaned;
+      continue;
+    }
     if (obj.type === "user") {
       const prompt = extractClaudePrompt(obj);
       if (!prompt) continue;
@@ -231,6 +257,12 @@ async function scanClaudeSession(filePath) {
   return finalizeRecord({
     version: SIDECAR_VERSION,
     session_hash: sessionHash("claude", rawSessionId),
+    session_id: rawSessionId || null,
+    // Claude's own generated one-line title (the "ai-title" record). Agent-
+    // authored metadata, never the raw prompt body. Local-only: stripped in
+    // summarizeSessions before any cloud/CSV export. Null when Claude never
+    // wrote one — the UI then falls back to the project name.
+    title: aiTitle,
     source: "claude",
     project_key: projectKey(cwd, filePath),
     project_ref: cwd || null,
@@ -327,9 +359,17 @@ async function scanCodexSession(filePath) {
   const model = parsedModel && parsedModel.toLowerCase() !== provider?.toLowerCase()
     ? parsedModel
     : "unknown";
+  // Codex's own thread title from session_index.jsonl (Codex-authored
+  // metadata, keyed by session id). Null when Codex never named the thread —
+  // the UI then falls back to the project name.
+  const titleIndex = loadCodexTitleIndex(filePath);
+  const title = (parsed.sessionId && titleIndex.get(parsed.sessionId)) || null;
   return finalizeRecord({
     version: SIDECAR_VERSION,
     session_hash: sessionHash("codex", parsed.sessionId || filePath),
+    session_id: parsed.sessionId || null,
+    // Local-only: stripped in summarizeSessions before any cloud/CSV export.
+    title,
     source: "codex",
     project_key: projectKey(parsed.cwd, filePath),
     project_ref: parsed.cwd || null,
@@ -398,6 +438,50 @@ function sessionFileStatKey(filePath) {
   }
 }
 
+// Codex records its own per-thread title (thread_name) in
+// ~/.codex/session_index.jsonl (`{ id, thread_name, updated_at }`). We read it
+// once per build and memoize by the index's stat so repeated scans are cheap.
+const codexTitleIndexCache = new Map();
+
+function codexTitleIndexPathFor(filePath) {
+  const parts = path.resolve(filePath).split(path.sep);
+  const idx = parts.lastIndexOf(".codex");
+  if (idx === -1) return null;
+  return [...parts.slice(0, idx + 1), "session_index.jsonl"].join(path.sep);
+}
+
+function loadCodexTitleIndex(filePath) {
+  const indexPath = codexTitleIndexPathFor(filePath);
+  if (!indexPath) return new Map();
+  const statKey = sessionFileStatKey(indexPath);
+  const cached = codexTitleIndexCache.get(indexPath);
+  if (cached && cached.statKey === statKey) return cached.titles;
+  const titles = new Map();
+  if (statKey) {
+    try {
+      for (const line of fs.readFileSync(indexPath, "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        let obj;
+        try { obj = JSON.parse(line); } catch { continue; }
+        const id = typeof obj?.id === "string" ? obj.id : null;
+        const name = cleanSessionTitle(obj?.thread_name);
+        if (id && name) titles.set(id, name);
+      }
+    } catch { /* no index yet */ }
+  }
+  codexTitleIndexCache.set(indexPath, { statKey, titles });
+  return titles;
+}
+
+// A Codex row also depends on session_index.jsonl, not just its rollout file.
+// Include that dependency in the incremental cache key so renaming a thread is
+// visible after the next refresh instead of leaving a stale title indefinitely.
+function analyticsEntryStatKey(source, filePath) {
+  const sessionStat = sessionFileStatKey(filePath);
+  if (!sessionStat || source !== "codex") return sessionStat;
+  return `${sessionStat}|title-index:${sessionFileStatKey(codexTitleIndexPathFor(filePath)) || "missing"}`;
+}
+
 function readSidecar(sidecarPath) {
   try {
     return fs.readFileSync(sidecarPath, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -429,7 +513,14 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     } catch { /* first run */ }
   }
   const discovered = await discoverSessionFiles(home);
-  const signature = filesSignature([...discovered.claude, ...discovered.codex]);
+  // Codex thread titles are stored separately from rollout files. Include the
+  // index in the overall signature so an index-only rename reaches the
+  // per-file dependency check below on the next refresh.
+  const signature = filesSignature([
+    ...discovered.claude,
+    ...discovered.codex,
+    ...discovered.codex.map(codexTitleIndexPathFor).filter(Boolean),
+  ]);
   if (!force && previousMeta?.version === SIDECAR_VERSION && previousMeta.signature === signature) {
     await writeAtomic(metaPath, `${JSON.stringify({ ...previousMeta, checked_at: new Date().toISOString() })}\n`);
     return readSidecar(sidecarPath);
@@ -452,7 +543,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   ];
   for (const entry of entries) {
     const cacheKey = sessionFileCacheKey(entry.source, entry.filePath);
-    const statKey = sessionFileStatKey(entry.filePath);
+    const statKey = analyticsEntryStatKey(entry.source, entry.filePath);
     if (!statKey) continue;
     let row = null;
     if (!force && previousFiles[cacheKey]?.stat_key === statKey) {
@@ -565,10 +656,11 @@ function summarizeSessions(sessions, { from = "", to = "", includeSessions = tru
   }, { sessions: 0, productive_sessions: 0, one_shot_sessions: 0, edit_turns: 0, retries: 0, total_tokens: 0, cost_usd: 0, edit_tokens: 0, edit_cost_usd: 0 });
   return {
     available: filtered.length > 0,
-    // Local filesystem paths are required internally for Git attribution but
-    // never leave the Node process through API/CSV payloads.
+    // Local filesystem paths and raw session ids are required internally for
+    // Git attribution and the local-only session browser, but never leave the
+    // Node process through API/CSV payloads.
     sessions: includeSessions
-      ? filtered.map(({ project_ref: _projectRef, _cache_key: _cacheKey, ...row }) => row)
+      ? filtered.map(({ project_ref: _projectRef, session_id: _sessionId, title: _title, _cache_key: _cacheKey, ...row }) => row)
       : [],
     session_count: filtered.length,
     summary: {
@@ -595,6 +687,120 @@ function summarizeSessions(sessions, { from = "", to = "", includeSessions = tru
   };
 }
 
+// Build the resume command a user can run to continue a past session. The
+// session id is a vendor-generated UUID and never contains user prose.
+function resumeCommandFor(source, sessionId) {
+  const id = typeof sessionId === "string" ? sessionId.trim() : "";
+  // Session ids come from local log files, which can be edited by other local
+  // processes. Only emit an unquoted shell token so copying the suggested
+  // command can never smuggle whitespace, flags, or shell metacharacters into
+  // the user's terminal. Claude also has a small set of legacy non-UUID ids,
+  // so keep the accepted alphabet broader than UUID while still shell-safe.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(id)) return null;
+  if (source === "claude") return `claude --resume ${id}`;
+  if (source === "codex") return `codex resume ${id}`;
+  return null;
+}
+
+function toSessionBrowserRow(row) {
+  return {
+    session_hash: row.session_hash,
+    session_id: row.session_id || null,
+    title: row.title || null,
+    source: row.source,
+    project_key: row.project_key,
+    // project_ref (the local cwd) only ever travels over the local API so the
+    // browser can show where a session ran and compose a resume command.
+    project_ref: row.project_ref || null,
+    model: row.model,
+    started_at: row.started_at || null,
+    ended_at: row.ended_at || null,
+    duration_ms: finite(row.duration_ms),
+    turns: finite(row.turns),
+    edit_turns: finite(row.edit_turns),
+    retry_turns: finite(row.retry_turns),
+    subagent_calls: finite(row.subagent_calls),
+    total_tokens: finite(row.total_tokens),
+    cost_usd: finite(row.cost_usd),
+    productive: Boolean(row.productive),
+    first_pass: Boolean(row.first_pass ?? row.one_shot),
+    resume_command: resumeCommandFor(row.source, row.session_id),
+  };
+}
+
+// Claude writes several on-disk files for one logical session (resumes and
+// sub-agent sidechains) that all carry the same session id, so scanning yields
+// multiple rows sharing an identical session_hash. Merge those fragments into
+// one resumable session for the browser: sum the (non-overlapping) per-file
+// token/turn counts, span the timestamps, and keep the agent-authored title.
+// This also gives the UI a stable, unique key per row.
+function mergeSessionFragments(rows) {
+  const byHash = new Map();
+  for (const row of rows || []) {
+    const key = row.session_hash;
+    const cur = byHash.get(key);
+    if (!cur) {
+      byHash.set(key, { ...row, _repr_tokens: finite(row.total_tokens) });
+      continue;
+    }
+    cur.turns = finite(cur.turns) + finite(row.turns);
+    cur.edit_turns = finite(cur.edit_turns) + finite(row.edit_turns);
+    cur.retry_turns = finite(cur.retry_turns) + finite(row.retry_turns);
+    cur.subagent_calls = finite(cur.subagent_calls) + finite(row.subagent_calls);
+    cur.total_tokens = finite(cur.total_tokens) + finite(row.total_tokens);
+    cur.cost_usd = finite(cur.cost_usd) + finite(row.cost_usd);
+    cur.productive = Boolean(cur.productive) || Boolean(row.productive);
+    if (!cur.title && row.title) cur.title = row.title;
+    // Representative model/project comes from the busiest fragment (most
+    // tokens) so a tiny sidechain cannot overwrite the real coding model.
+    if (finite(row.total_tokens) > finite(cur._repr_tokens)) {
+      cur._repr_tokens = finite(row.total_tokens);
+      if (row.model && row.model !== "unknown") cur.model = row.model;
+      cur.project_key = row.project_key;
+      cur.project_ref = row.project_ref;
+    }
+    if (row.started_at && (!cur.started_at || row.started_at < cur.started_at)) cur.started_at = row.started_at;
+    if (row.ended_at && (!cur.ended_at || row.ended_at > cur.ended_at)) cur.ended_at = row.ended_at;
+  }
+  const merged = [];
+  for (const row of byHash.values()) {
+    delete row._repr_tokens;
+    const startedMs = Date.parse(row.started_at || "");
+    const endedMs = Date.parse(row.ended_at || "");
+    row.duration_ms = Number.isFinite(startedMs) && Number.isFinite(endedMs) ? Math.max(0, endedMs - startedMs) : 0;
+    row.first_pass = finite(row.edit_turns) === 1 && finite(row.retry_turns) === 0;
+    row.one_shot = row.first_pass;
+    merged.push(row);
+  }
+  return merged;
+}
+
+// Local-only session list for the dashboard session browser. Unlike
+// summarizeSessions (cloud/CSV safe), this retains session_id + project_ref so
+// the UI can offer one-click resume. Callers must only expose it over the
+// local API.
+function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0 } = {}) {
+  const filtered = mergeSessionFragments(sessions).filter((row) => {
+    const day = String(row.started_at || row.ended_at || "").slice(0, 10);
+    return (!from || day >= from) && (!to || day <= to);
+  });
+  filtered.sort((a, b) => String(b.ended_at || "").localeCompare(String(a.ended_at || "")));
+  const cap = Number(limit) > 0 ? Number(limit) : 0;
+  const limited = cap > 0 ? filtered.slice(0, cap) : filtered;
+  return {
+    available: filtered.length > 0,
+    session_count: filtered.length,
+    returned_count: limited.length,
+    sessions: limited.map(toSessionBrowserRow),
+    provenance: {
+      source: "local-session-log",
+      confidence: "observed",
+      privacy: "metadata-only",
+      scope: "local-only",
+    },
+  };
+}
+
 function sessionsToCsv(rows) {
   const columns = ["session_hash", "source", "project_key", "model", "started_at", "ended_at", "duration_ms", "turns", "edit_turns", "retry_turns", "subagent_calls", "total_tokens", "cost_usd", "productive", "first_pass", "one_shot"];
   const escape = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
@@ -608,5 +814,7 @@ module.exports = {
   scanCodexSession,
   buildSessionAnalytics,
   summarizeSessions,
+  listSessionsForBrowser,
+  resumeCommandFor,
   sessionsToCsv,
 };

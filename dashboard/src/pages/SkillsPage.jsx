@@ -22,7 +22,7 @@ import {
   Trash2,
   X as XIcon,
 } from "lucide-react";
-import { Button, Card, ConfirmModal, DismissibleHint, Input } from "../ui/components";
+import { Button, Card, ConfirmModal, DismissibleHint, Input, SegmentedControl } from "../ui/components";
 import { ProviderIcon } from "../ui/dashboard/components/ProviderIcon.jsx";
 import { showToast } from "../ui/components/Toast.jsx";
 import { SkillDetailPanel } from "./SkillDetailPanel.jsx";
@@ -1527,49 +1527,32 @@ export function SkillsPage() {
 
           {tab === "browse" ? (
             <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center">
-              <div
-                role="tablist"
-                aria-label={copy("skills.source.label")}
-                className="inline-flex h-10 shrink-0 items-center rounded-md border border-oai-gray-200 bg-oai-white p-1 dark:border-oai-gray-800 dark:bg-oai-gray-900"
-              >
-                {[
-                  ["repo", copy("skills.mode.repo"), source !== SOURCE_SKILLSSH && source !== SOURCE_POPULAR],
-                  ["popular", copy("skills.mode.popular"), source === SOURCE_POPULAR],
-                  ["skillssh", copy("skills.mode.skillssh"), source === SOURCE_SKILLSSH],
-                ].map(([value, label, active]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="tab"
-                    aria-selected={active}
-                    onClick={() => {
-                      if (value === "skillssh") setSource(SOURCE_SKILLSSH);
-                      else if (value === "popular") setSource(SOURCE_POPULAR);
-                      else if (source === SOURCE_SKILLSSH || source === SOURCE_POPULAR) setSource(SOURCE_ALL);
-                    }}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded px-3 py-1 text-sm font-medium transition-colors",
-                      active
-                        ? "bg-oai-gray-100 text-oai-black dark:bg-oai-gray-700 dark:text-white"
-                        : "text-oai-gray-500 hover:text-oai-gray-800 dark:text-oai-gray-400 dark:hover:text-oai-gray-200",
-                    )}
-                  >
-                    {value === "popular" ? <Flame className="h-3.5 w-3.5" aria-hidden /> : null}
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl
+                className="shrink-0"
+                ariaLabel={copy("skills.source.label")}
+                options={[
+                  { id: "repo", label: copy("skills.mode.repo") },
+                  { id: "popular", label: copy("skills.mode.popular"), icon: <Flame className="h-3.5 w-3.5" aria-hidden /> },
+                  { id: "skillssh", label: copy("skills.mode.skillssh") },
+                ]}
+                value={source === SOURCE_SKILLSSH ? "skillssh" : source === SOURCE_POPULAR ? "popular" : "repo"}
+                onChange={(next) => {
+                  if (next === "skillssh") setSource(SOURCE_SKILLSSH);
+                  else if (next === "popular") setSource(SOURCE_POPULAR);
+                  else if (source === SOURCE_SKILLSSH || source === SOURCE_POPULAR) setSource(SOURCE_ALL);
+                }}
+              />
               {source !== SOURCE_SKILLSSH && source !== SOURCE_POPULAR ? (
                 <Select.Root value={source} onValueChange={setSource}>
                   <Select.Trigger
                     aria-label={copy("skills.source.label")}
-                    className="inline-flex h-10 w-44 shrink-0 items-center justify-between gap-2 rounded-md border border-oai-gray-200 bg-oai-white px-3 text-sm text-oai-black focus:outline-none data-[popup-open]:border-oai-gray-300 dark:border-oai-gray-800 dark:bg-oai-gray-900 dark:text-white dark:data-[popup-open]:border-oai-gray-700"
+                    className="inline-flex h-8 w-44 shrink-0 items-center justify-between gap-2 rounded-md border border-oai-gray-200 bg-oai-white px-2.5 text-xs text-oai-black focus:outline-none data-[popup-open]:border-oai-gray-300 dark:border-oai-gray-800 dark:bg-oai-gray-900 dark:text-white dark:data-[popup-open]:border-oai-gray-700"
                   >
                     <Select.Value>
                       {(value) => (value === SOURCE_ALL ? copy("skills.source.all") : value)}
                     </Select.Value>
                     <Select.Icon className="text-oai-gray-400">
-                      <ChevronDown className="h-4 w-4" aria-hidden />
+                      <ChevronDown className="h-3.5 w-3.5" aria-hidden />
                     </Select.Icon>
                   </Select.Trigger>
                   <Select.Portal>
@@ -1623,12 +1606,13 @@ export function SkillsPage() {
                           ? copy("skills.browse.placeholder_all")
                           : copy("skills.browse.placeholder_repo", { repo: source })
                   }
-                  className="pl-9 !border-oai-gray-200 dark:!border-oai-gray-800 focus:!border-oai-gray-400 focus:!ring-oai-gray-400/20 dark:focus:!border-oai-gray-500 dark:focus:!ring-oai-gray-500/20"
+                  className="h-8 pl-9 !border-oai-gray-200 dark:!border-oai-gray-800 focus:!border-oai-gray-400 focus:!ring-oai-gray-400/20 dark:focus:!border-oai-gray-500 dark:focus:!ring-oai-gray-500/20"
                 />
               </div>
               {source === SOURCE_SKILLSSH ? (
                 <Button
                   type="button"
+                  size="sm"
                   onClick={handleSearch}
                   disabled={query.trim().length < 2 || busyKey === "search"}
                   className="focus:!ring-oai-gray-400/30"
@@ -1647,7 +1631,7 @@ export function SkillsPage() {
                   size="sm"
                   onClick={() => setManageOpen((prev) => !prev)}
                   aria-expanded={manageOpen}
-                  className="!h-10 shrink-0 whitespace-nowrap !border-oai-gray-200 dark:!border-oai-gray-800 hover:!border-oai-gray-300 dark:hover:!border-oai-gray-700 hover:!text-oai-black dark:hover:!text-white focus:!ring-oai-gray-400/30"
+                  className="!h-8 shrink-0 whitespace-nowrap !border-oai-gray-200 dark:!border-oai-gray-800 hover:!border-oai-gray-300 dark:hover:!border-oai-gray-700 hover:!text-oai-black dark:hover:!text-white focus:!ring-oai-gray-400/30"
                 >
                   <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
                   {copy("skills.browse.manage_sources")}

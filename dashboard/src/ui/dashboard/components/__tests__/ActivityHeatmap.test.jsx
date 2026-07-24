@@ -1,6 +1,12 @@
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { ThemeContext } from "../../../foundation/ThemeProvider.jsx";
+import { TokenFormatContext } from "../../../foundation/TokenFormatProvider.jsx";
+import {
+  TOKEN_FORMAT_MODES,
+  formatTokenCount,
+  formatTokenTooltip,
+} from "../../../../lib/token-format.js";
 import { ActivityHeatmap } from "../ActivityHeatmap.jsx";
 
 const themeValue = {
@@ -10,7 +16,7 @@ const themeValue = {
   toggleTheme: () => {},
 };
 
-function renderHeatmap(props = {}) {
+function renderHeatmap({ tokenFormatValue = null, ...props } = {}) {
   const heatmap = {
     to: "2026-05-02",
     weeks: [
@@ -26,10 +32,16 @@ function renderHeatmap(props = {}) {
     ],
   };
 
-  return render(
+  const content = (
     <ThemeContext.Provider value={themeValue}>
       <ActivityHeatmap heatmap={heatmap} timeZoneShortLabel="UTC" {...props} />
-    </ThemeContext.Provider>,
+    </ThemeContext.Provider>
+  );
+
+  return render(
+    tokenFormatValue
+      ? <TokenFormatContext.Provider value={tokenFormatValue}>{content}</TokenFormatContext.Provider>
+      : content,
   );
 }
 
@@ -78,5 +90,37 @@ describe("ActivityHeatmap", () => {
     expect(container.querySelector("[role='tablist']")).toBeNull();
     // The embedded instance must not clobber the dashboard's persisted choice.
     expect(window.localStorage.getItem("tt:heatmap-view")).toBe("3d");
+  });
+
+  it("keeps the 3D modal's left-side token metrics compact in full-number mode", () => {
+    const fullNumberFormat = {
+      mode: TOKEN_FORMAT_MODES.FULL,
+      setMode: () => {},
+      formatTokens: (value, options = {}) =>
+        formatTokenCount(value, { mode: TOKEN_FORMAT_MODES.FULL, ...options }),
+      formatTokensTooltip: (value, options = {}) =>
+        formatTokenTooltip(value, { mode: TOKEN_FORMAT_MODES.FULL, ...options }),
+    };
+    const heatmap = {
+      to: "2026-05-02",
+      weeks: [[
+        {
+          day: "2026-05-02",
+          value: 12_345_678,
+          total_tokens: 12_345_678,
+          level: 4,
+        },
+      ]],
+    };
+
+    const { getAllByText, getByRole, getByTitle } = renderHeatmap({
+      heatmap,
+      tokenFormatValue: fullNumberFormat,
+    });
+
+    fireEvent.click(getByRole("tab", { name: "3D" }));
+    fireEvent.click(getByTitle("Click to enter 3D fullscreen rotation analysis mode"));
+
+    expect(getAllByText("12.35M")).toHaveLength(2);
   });
 });

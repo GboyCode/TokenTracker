@@ -1163,6 +1163,10 @@ function localDataApiPlugin() {
   // so evict its derived-metrics scanner too; otherwise a dashboard refresh
   // can keep serving stale edit-turn, provider/model, retry, and incremental
   // scan behavior until Vite restarts.
+  // NOTE: editing src/lib/*.js alone does NOT hot-reload here (those files are
+  // outside dashboard's module graph). Only a Vite config reload / full restart
+  // re-runs this eviction — e.g. the Sessions browser title (ai-title /
+  // thread_name) and fragment merging will keep serving stale data until then.
   for (const modulePath of ["../src/lib/local-api", "../src/lib/session-analytics"]) {
     try {
       delete esmRequire.cache[esmRequire.resolve(modulePath)];
@@ -1204,7 +1208,12 @@ function localDataApiPlugin() {
         const isRepoSessionAnalyticsApi =
           url.pathname === "/functions/tokentracker-session-insights"
           || url.pathname === "/functions/tokentracker-context-health"
-          || url.pathname === "/functions/tokentracker-outcomes";
+          || url.pathname === "/functions/tokentracker-outcomes"
+          // The metadata-only session browser lives in this checkout's
+          // local-api.js (it needs the raw session id + local project path to
+          // build resume commands). Keep it off :7680 so a stale packaged app
+          // there does not 404 the Sessions page.
+          || url.pathname === "/functions/tokentracker-sessions";
         if (isRepoPetApi || isRepoProjectUsageApi || isRepoSessionAnalyticsApi) {
           Promise.resolve(handleRepoLocalApi(req, res, url))
             .then((handled) => { if (!handled) next(); })

@@ -2147,6 +2147,33 @@ function createLocalApiHandler({ queuePath }) {
       return true;
     }
 
+    // --- metadata-only session browser (LOCAL ONLY) ---
+    // Unlike session-insights this returns per-session rows that retain the
+    // raw session_id + local project path so the dashboard can offer one-click
+    // resume. It is intentionally served only from the local API and never
+    // proxied to the cloud account view.
+    if (p === "/functions/tokentracker-sessions") {
+      const from = url.searchParams.get("from") || "";
+      const to = url.searchParams.get("to") || "";
+      const refresh = ["1", "true"].includes(url.searchParams.get("refresh"));
+      const limitParam = parseInt(url.searchParams.get("limit") || "0", 10);
+      const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 2000) : 0;
+      // This payload contains local paths and resumable session identifiers.
+      // The server is loopback-only; additionally prevent browser/proxy caches
+      // from retaining the response after the page is closed.
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      try {
+        const { buildSessionAnalytics, listSessionsForBrowser } = require("./session-analytics");
+        const sessions = await buildSessionAnalytics({ force: refresh });
+        const result = listSessionsForBrowser(sessions, { from, to, limit });
+        json(res, { from, to, ...result });
+      } catch (error) {
+        json(res, { available: false, error: error?.message || "Session browser failed" }, 500);
+      }
+      return true;
+    }
+
     // --- fixed context overhead audit (counts and estimates only) ---
     if (p === "/functions/tokentracker-context-health") {
       const { computeContextHealth } = require("./context-health");

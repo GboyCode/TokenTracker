@@ -99,6 +99,16 @@ test("Vite dev server handles current repo session analytics instead of an insta
     assert.equal(sessions.nextCalled, false);
     assert.equal(sessions.statusCode, 200);
     assert.equal(typeof JSON.parse(sessions.body).available, "boolean");
+
+    const browser = await request(middleware, "/functions/tokentracker-sessions?limit=25");
+    const browserPayload = JSON.parse(browser.body);
+    assert.equal(browser.nextCalled, false);
+    assert.equal(browser.statusCode, 200);
+    assert.equal(browser.headers["cache-control"], "no-store");
+    assert.equal(browser.headers["x-content-type-options"], "nosniff");
+    assert.equal(typeof browserPayload.available, "boolean");
+    assert.equal(Array.isArray(browserPayload.sessions), true);
+    assert.equal(browserPayload.returned_count, browserPayload.sessions.length);
   } finally {
     global.fetch = previousFetch;
     if (previousHome === undefined) delete process.env.HOME;

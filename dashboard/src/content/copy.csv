@@ -755,6 +755,7 @@ shared.time.h_ago,shared,*,Shared,time_h_ago,"{{n}}h",,active
 shared.time.d_ago,shared,*,Shared,time_d_ago,"{{n}}d",,active
 nav.ip_check,shared,*,Sidebar,nav_ip_check,Claude IP Check,,active
 nav.skills,shared,*,Sidebar,nav_skills,Skills,,active
+nav.sessions,shared,*,Sidebar,nav_sessions,Sessions,,active
 skills.page.title,ui,SkillsPage,SkillsPage,title,Skills,,active
 skills.tab.my,ui,SkillsPage,SkillsPage,tab_my,My Skills,,active
 skills.tab.browse,ui,SkillsPage,SkillsPage,tab_browse,Browse,,active
@@ -1296,6 +1297,42 @@ sessions.card.context_tooltip,dashboard,DashboardPage,SessionInsightsCard,contex
 sessions.card.privacy,dashboard,DashboardPage,SessionInsightsCard,privacy,"Local metadata only. Prompt, response, command output, and diff contents are never retained.",,active
 sessions.card.subagents,dashboard,DashboardPage,SessionInsightsCard,subagents,"Subagent dispatches",,active
 sessions.card.subagent_item,dashboard,DashboardPage,SessionInsightsCard,subagent_item,"{{name}} · {{calls}}",,active
+sessions.page.subtitle,ui,SessionsPage,SessionsPage,subtitle,"Browse your local Claude Code and Codex sessions and copy a resume command in one click.",,active
+sessions.page.refresh,ui,SessionsPage,SessionsPage,refresh,"Refresh sessions",,active
+sessions.filter.source_all,ui,SessionsPage,SessionsPage,filter_source_all,"All",,active
+sessions.filter.source_aria,ui,SessionsPage,SessionsPage,filter_source_aria,"Filter by session source",,active
+sessions.filter.range_all,ui,SessionsPage,SessionsPage,filter_range_all,"All",,active
+sessions.filter.range_aria,ui,SessionsPage,SessionsPage,filter_range_aria,"Filter by date range",,active
+sessions.filter.range_7d,ui,SessionsPage,SessionsPage,filter_range_7d,"7d",,active
+sessions.filter.range_30d,ui,SessionsPage,SessionsPage,filter_range_30d,"30d",,active
+sessions.filter.range_90d,ui,SessionsPage,SessionsPage,filter_range_90d,"90d",,active
+sessions.filter.project_all,ui,SessionsPage,SessionsPage,filter_project_all,"All projects",,active
+sessions.filter.project_search,ui,SessionsPage,SessionsPage,filter_project_search,"Search projects…",,active
+sessions.filter.project_empty,ui,SessionsPage,SessionsPage,filter_project_empty,"No matching projects",,active
+sessions.filter.project_aria,ui,SessionsPage,SessionsPage,filter_project_aria,"Filter by project",,active
+sessions.filter.result_count,ui,SessionsPage,SessionsPage,filter_result_count,"{{filtered}} of {{total}}",,active
+sessions.action.search_aria,ui,SessionsPage,SessionsPage,search_aria,"Search sessions",,active
+sessions.action.search_clear,ui,SessionsPage,SessionsPage,search_clear,"Clear search",,active
+sessions.search.placeholder,ui,SessionsPage,SessionsPage,search_placeholder,"Search title, project, model, or ID…",,active
+sessions.loading,ui,SessionsPage,SessionsPage,loading,"Loading sessions…",,active
+sessions.col.tokens,ui,SessionsPage,SessionsPage,col_tokens,"Tokens",,active
+sessions.col.cost,ui,SessionsPage,SessionsPage,col_cost,"Cost",,active
+sessions.col.edits,ui,SessionsPage,SessionsPage,col_edits,"Edits",,active
+sessions.badge.first_pass,ui,SessionsPage,SessionsPage,badge_first_pass,"First-pass",,active
+sessions.duration.minutes,ui,SessionsPage,SessionsPage,duration_minutes,"{{minutes}}m",,active
+sessions.duration.hours,ui,SessionsPage,SessionsPage,duration_hours,"{{hours}}h {{minutes}}m",,active
+sessions.project.unknown,ui,SessionsPage,SessionsPage,project_unknown,"Untitled session",,active
+sessions.model.unknown,ui,SessionsPage,SessionsPage,model_unknown,"Unknown model",,active
+sessions.resume.copy,ui,SessionsPage,SessionsPage,resume_copy,"Copy command",,active
+sessions.resume.copy_aria,ui,SessionsPage,SessionsPage,resume_copy_aria,"Copy resume command: {{command}}",,active
+sessions.resume.copied,ui,SessionsPage,SessionsPage,resume_copied,"Resume command copied",,active
+sessions.resume.copy_failed,ui,SessionsPage,SessionsPage,resume_copy_failed,"Could not copy command",,active
+sessions.resume.unavailable,ui,SessionsPage,SessionsPage,resume_unavailable,"Resume command unavailable",,active
+sessions.empty.title,ui,SessionsPage,SessionsPage,empty_title,"No sessions yet",,active
+sessions.empty.body,ui,SessionsPage,SessionsPage,empty_body,"Run Claude Code or Codex on this machine and your sessions will show up here.",,active
+sessions.empty.filtered_title,ui,SessionsPage,SessionsPage,empty_filtered_title,"No matching sessions",,active
+sessions.empty.filtered_body,ui,SessionsPage,SessionsPage,empty_filtered_body,"Try a different search or clear the filters.",,active
+sessions.privacy,ui,SessionsPage,SessionsPage,privacy,"Processed locally. Prompt and response bodies, command output, and diff contents are never retained or uploaded.",,active
 limits.alert.enable,limits,LimitsPage,LimitsPage,enable_alerts,"Enable predictive limit alerts",,active
 limits.alert.disable,limits,LimitsPage,LimitsPage,disable_alerts,"Disable predictive limit alerts",,active
 limits.alert.title,limits,LimitsPage,LimitsPage,alert_title,"{{provider}} limit may run out early",,active

@@ -8,5 +8,7 @@ export { Badge } from "./Badge";
 export { ConfirmModal } from "./ConfirmModal";
 export { Input } from "./Input";
 export { Select } from "./Select";
+export { SegmentedControl } from "./SegmentedControl.jsx";
+export { SearchableSelect } from "./SearchableSelect.jsx";
 export { DismissibleHint } from "./DismissibleHint.jsx";
 export { default as Counter } from "./Counter";

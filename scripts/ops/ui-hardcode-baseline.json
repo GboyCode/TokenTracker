@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-07-24T06:49:21.930Z",
+  "generatedAt": "2026-07-24T15:17:23.210Z",
   "root": "dashboard/src",
   "rules": {
     "colors": "hex/rgb(a) literals",
     "rawText": "JSX text nodes containing letters or digits"
   },
   "totals": {
-    "colors": 375,
-    "rawText": 151
+    "colors": 377,
+    "rawText": 155
   },
   "files": {
     "dashboard/src/components/InsforgeUserHeaderControls.jsx": {
@@ -17,6 +17,23 @@
         ") : avatarSrc && !avatarFailed ? (",
         ") : initialsFromName(displayName) === \"?\" ? ("
       ]
+    },
+    "dashboard/src/components/LeaderboardSummaryCard.test.jsx": {
+      "colors": 1,
+      "rawText": 0,
+      "rawTextTokens": []
+    },
+    "dashboard/src/components/LoginCard.jsx": {
+      "colors": 4,
+      "rawText": 1,
+      "rawTextTokens": [
+        "); const GITHUB_ICON = ("
+      ]
+    },
+    "dashboard/src/components/SortableColumnHeader.jsx": {
+      "colors": 4,
+      "rawText": 0,
+      "rawTextTokens": []
     },
     "dashboard/src/components/leaderboard/CommunityStatsModal.jsx": {
       "colors": 0,
@@ -37,18 +54,6 @@
         "= 1)) && ("
       ]
     },
-    "dashboard/src/components/LeaderboardSummaryCard.test.jsx": {
-      "colors": 1,
-      "rawText": 0,
-      "rawTextTokens": []
-    },
-    "dashboard/src/components/LoginCard.jsx": {
-      "colors": 4,
-      "rawText": 1,
-      "rawTextTokens": [
-        "); const GITHUB_ICON = ("
-      ]
-    },
     "dashboard/src/components/settings/AccountSection.jsx": {
       "colors": 0,
       "rawText": 1,
@@ -63,11 +68,6 @@
         "GitHub"
       ]
     },
-    "dashboard/src/components/SortableColumnHeader.jsx": {
-      "colors": 4,
-      "rawText": 0,
-      "rawTextTokens": []
-    },
     "dashboard/src/contexts/LoginModalContext.jsx": {
       "colors": 0,
       "rawText": 1,
@@ -75,12 +75,29 @@
         "setIsOpen(false), []); return ("
       ]
     },
+    "dashboard/src/hooks/use-trend-data.issue360.test.tsx": {
+      "colors": 2,
+      "rawText": 2,
+      "rawTextTokens": [
+        "); rerender("
+      ]
+    },
+    "dashboard/src/hooks/use-trend-data.ts": {
+      "colors": 1,
+      "rawText": 0,
+      "rawTextTokens": []
+    },
     "dashboard/src/pages/AchievementsPage.jsx": {
       "colors": 0,
       "rawText": 1,
       "rawTextTokens": [
         "= 1).length, [merged], ); const total = BADGE_CATALOG.length; return ("
       ]
+    },
+    "dashboard/src/pages/DashboardPage.jsx": {
+      "colors": 1,
+      "rawText": 0,
+      "rawTextTokens": []
     },
     "dashboard/src/pages/IpCheckPage.jsx": {
       "colors": 12,
@@ -119,6 +136,13 @@
       "rawTextTokens": [
         ") : realSignedIn ? (",
         "Token Tracker"
+      ]
+    },
+    "dashboard/src/pages/SessionsPage.jsx": {
+      "colors": 0,
+      "rawText": 1,
+      "rawTextTokens": [
+        ") : filtered.length === 0 ? ("
       ]
     },
     "dashboard/src/pages/SkillDetailPanel.jsx": {
@@ -224,6 +248,18 @@
       "rawText": 1,
       "rawTextTokens": [
         "/\\d/.test(char) && (decimalIndex === -1 || index"
+      ]
+    },
+    "dashboard/src/ui/components/SearchableSelect.jsx": {
+      "colors": 2,
+      "rawText": 0,
+      "rawTextTokens": []
+    },
+    "dashboard/src/ui/components/SegmentedControl.jsx": {
+      "colors": 0,
+      "rawText": 1,
+      "rawTextTokens": [
+        "option.id === optionId); if (index"
       ]
     },
     "dashboard/src/ui/components/Shell.jsx": {
@@ -380,6 +416,13 @@
         "1 ? ("
       ]
     },
+    "dashboard/src/ui/dashboard/components/__tests__/ActivityHeatmap.test.jsx": {
+      "colors": 0,
+      "rawText": 1,
+      "rawTextTokens": [
+        "); return render( tokenFormatValue ?"
+      ]
+    },
     "dashboard/src/ui/dashboard/components/__tests__/ActivityHeatmap3D.test.jsx": {
       "colors": 0,
       "rawText": 3,
@@ -387,6 +430,13 @@
         ").container; // The top face is rendered last in each cell",
         ").container; const darkSvg = render(",
         "g\"); expect(groups.length).toBe(2); //"
+      ]
+    },
+    "dashboard/src/ui/dashboard/components/__tests__/DataDetailsProjects.test.jsx": {
+      "colors": 0,
+      "rawText": 1,
+      "rawTextTokens": [
+        "); const result = render( tokenFormatValue ?"
       ]
     },
     "dashboard/src/ui/dashboard/components/__tests__/TrendMonitor.test.jsx": {
@@ -411,6 +461,15 @@
         "zh-tw"
       ]
     },
+    "dashboard/src/ui/marketing/MarketingLanding.jsx": {
+      "colors": 0,
+      "rawText": 3,
+      "rawTextTokens": [
+        ") : ( // 未登录：Sign In 展示为主行动实色按钮，点击唤起 Modal",
+        ") : signedIn ? ( // 已登录：Open Dashboard 升级为主行动实色按钮",
+        "Token Tracker"
+      ]
+    },
     "dashboard/src/ui/marketing/components/BorderGlow.jsx": {
       "colors": 6,
       "rawText": 0,
@@ -420,15 +479,6 @@
       "colors": 2,
       "rawText": 0,
       "rawTextTokens": []
-    },
-    "dashboard/src/ui/marketing/MarketingLanding.jsx": {
-      "colors": 0,
-      "rawText": 3,
-      "rawTextTokens": [
-        ") : ( // 未登录：Sign In 展示为主行动实色按钮，点击唤起 Modal",
-        ") : signedIn ? ( // 已登录：Open Dashboard 升级为主行动实色按钮",
-        "Token Tracker"
-      ]
     },
     "dashboard/src/ui/marketing/v3/CapabilitiesSection.jsx": {
       "colors": 1,
@@ -458,13 +508,13 @@
         "0 ? Math.max(6, Math.round((tokens / maxTokens) * 100)) : 0; return ("
       ]
     },
-    "dashboard/src/ui/marketing/v3/palette.js": {
-      "colors": 21,
+    "dashboard/src/ui/marketing/v3/TokenGalaxy.jsx": {
+      "colors": 2,
       "rawText": 0,
       "rawTextTokens": []
     },
-    "dashboard/src/ui/marketing/v3/TokenGalaxy.jsx": {
-      "colors": 2,
+    "dashboard/src/ui/marketing/v3/palette.js": {
+      "colors": 21,
       "rawText": 0,
       "rawTextTokens": []
     },
@@ -503,23 +553,6 @@
         "The Token Tracker",
         "→ tokentracker.cc"
       ]
-    },
-    "dashboard/src/hooks/use-trend-data.issue360.test.tsx": {
-      "colors": 2,
-      "rawText": 2,
-      "rawTextTokens": [
-        "); rerender("
-      ]
-    },
-    "dashboard/src/hooks/use-trend-data.ts": {
-      "colors": 1,
-      "rawText": 0,
-      "rawTextTokens": []
-    },
-    "dashboard/src/pages/DashboardPage.jsx": {
-      "colors": 1,
-      "rawText": 0,
-      "rawTextTokens": []
     }
   }
 }

@@ -1,6 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
+import { TokenFormatContext } from "../../../foundation/TokenFormatProvider.jsx";
 import { copy } from "../../../../lib/copy";
+import { getProjectUsageDetail } from "../../../../lib/api";
+import {
+  TOKEN_FORMAT_MODES,
+  formatTokenCount,
+  formatTokenTooltip,
+} from "../../../../lib/token-format.js";
 import { DataDetails } from "../DataDetails.jsx";
 
 // Same as TrendMonitor.test.jsx: the zoom modal's import graph pulls
@@ -55,8 +62,8 @@ const baseEntry = {
   ],
 };
 
-function renderProjects(props = {}) {
-  const result = render(
+function renderProjects({ tokenFormatValue = null, ...props } = {}) {
+  const content = (
     <DataDetails
       projectEntries={[baseEntry]}
       projectLimit={3}
@@ -72,7 +79,12 @@ function renderProjects(props = {}) {
       detailsPage={0}
       setDetailsPage={() => {}}
       {...props}
-    />,
+    />
+  );
+  const result = render(
+    tokenFormatValue
+      ? <TokenFormatContext.Provider value={tokenFormatValue}>{content}</TokenFormatContext.Provider>
+      : content,
   );
   fireEvent.click(screen.getByRole("tab", { name: copy("dashboard.projects.title") }));
   return result;
@@ -129,6 +141,54 @@ it("opens the drill-down modal on row click and loads detail data", async () => 
   expect(screen.getByText("88%")).toBeInTheDocument();
   // share of all usage = 1000 / 2000
   expect(screen.getByText("50%")).toBeInTheDocument();
+});
+
+it("keeps all project modal token values compact in full-number mode", async () => {
+  getProjectUsageDetail.mockResolvedValueOnce({
+    project_key: "acme/alpha",
+    project_ref: "https://github.com/acme/alpha",
+    totals: {
+      total_tokens: 12_345_678,
+      billable_total_tokens: 12_345_678,
+      input_tokens: 1_000_000,
+      output_tokens: 2_000_000,
+      cached_input_tokens: 7_000_000,
+      cache_creation_input_tokens: 2_000_000,
+      reasoning_output_tokens: 345_678,
+      conversation_count: 12,
+    },
+    days_active: 2,
+    range_total_tokens: 24_691_356,
+    daily: [
+      { day: "2026-04-19", total_tokens: 6_000_000 },
+      { day: "2026-04-20", total_tokens: 6_345_678 },
+    ],
+    sources: [
+      {
+        source: "claude",
+        total_tokens: 11_111_111,
+        conversation_count: 10,
+        days_active: 2,
+      },
+    ],
+  });
+  const fullNumberFormat = {
+    mode: TOKEN_FORMAT_MODES.FULL,
+    setMode: () => {},
+    formatTokens: (value, options = {}) =>
+      formatTokenCount(value, { mode: TOKEN_FORMAT_MODES.FULL, ...options }),
+    formatTokensTooltip: (value, options = {}) =>
+      formatTokenTooltip(value, { mode: TOKEN_FORMAT_MODES.FULL, ...options }),
+  };
+
+  renderProjects({ tokenFormatValue: fullNumberFormat });
+  fireEvent.click(screen.getByText("alpha"));
+
+  await waitFor(() => {
+    expect(screen.getByText("12.3M")).toBeInTheDocument();
+  });
+  expect(screen.getByText("6.2M")).toBeInTheDocument();
+  expect(screen.getByText("11.1M")).toBeInTheDocument();
 });
 
 it("closes the modal via the close button", async () => {

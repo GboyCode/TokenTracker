@@ -287,7 +287,7 @@ describe("LeaderboardPage window-session cache reuse", () => {
       userId: "user-1",
     });
     publishLeaderboardPreloadState(preloadedData, { contextKey });
-    getLeaderboard.mockRejectedValue(new Error("network down"));
+    getLeaderboard.mockRejectedValueOnce(new Error("network down"));
 
     renderLeaderboard();
 
@@ -306,7 +306,10 @@ describe("LeaderboardPage window-session cache reuse", () => {
       mockEnabled: false,
       userId: "user-1",
     });
-    getLeaderboard.mockRejectedValue(new Error("network down"));
+    // Keep the rejection scoped to the request asserted below. A permanent
+    // rejecting mock can be reached by a delayed cleanup/preload from another
+    // test and becomes an unhandled rejection in the full suite.
+    getLeaderboard.mockRejectedValueOnce(new Error("network down"));
 
     renderLeaderboard();
 
