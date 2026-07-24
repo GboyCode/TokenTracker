@@ -56,6 +56,15 @@ export function useTrendData({
   const sharedFrom = sharedRange?.from || from;
   const sharedTo = sharedRange?.to || to;
 
+  // Read shared rows through a ref inside `refresh` so the callback identity
+  // does NOT change on every new `sharedRows` reference (DashboardPage passes
+  // its `daily` array here, which is re-created on every fetch). Keeping
+  // `refresh` stable is what stops the aggregate refresher upstream from
+  // churning identity and driving an infinite usage-refresh loop (#360). The
+  // request guard and the mount effect below still react to shared changes.
+  const sharedStateRef = useRef({ sharedEnabled, sharedRows, sharedFrom, sharedTo });
+  sharedStateRef.current = { sharedEnabled, sharedRows, sharedFrom, sharedTo };
+
   const mode = useMemo(() => {
     if (period === "day") return "hourly";
     if (period === "total") return "monthly";
@@ -155,9 +164,15 @@ export function useTrendData({
 
   const refresh = useCallback(async () => {
     const isCurrent = beginRequest();
-    if (sharedEnabled) {
-      setRows(Array.isArray(sharedRows) ? sharedRows : []);
-      setRange({ from: sharedFrom, to: sharedTo });
+    const {
+      sharedEnabled: sharedEnabledNow,
+      sharedRows: sharedRowsNow,
+      sharedFrom: sharedFromNow,
+      sharedTo: sharedToNow,
+    } = sharedStateRef.current;
+    if (sharedEnabledNow) {
+      setRows(Array.isArray(sharedRowsNow) ? sharedRowsNow : []);
+      setRange({ from: sharedFromNow, to: sharedToNow });
       setSource("shared");
       setFetchedAt(null);
       setLoading(false);
@@ -329,10 +344,6 @@ export function useTrendData({
     months,
     readCache,
     tokenReady,
-    sharedEnabled,
-    sharedFrom,
-    sharedRows,
-    sharedTo,
     timeZone,
     to,
     tzOffsetMinutes,

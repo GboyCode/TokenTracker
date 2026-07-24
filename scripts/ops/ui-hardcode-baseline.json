@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-07-22T05:09:42.766Z",
+  "generatedAt": "2026-07-24T06:49:21.930Z",
   "root": "dashboard/src",
   "rules": {
     "colors": "hex/rgb(a) literals",
     "rawText": "JSX text nodes containing letters or digits"
   },
   "totals": {
-    "colors": 371,
-    "rawText": 149
+    "colors": 375,
+    "rawText": 151
   },
   "files": {
     "dashboard/src/components/InsforgeUserHeaderControls.jsx": {
@@ -503,6 +503,23 @@
         "The Token Tracker",
         "→ tokentracker.cc"
       ]
+    },
+    "dashboard/src/hooks/use-trend-data.issue360.test.tsx": {
+      "colors": 2,
+      "rawText": 2,
+      "rawTextTokens": [
+        "); rerender("
+      ]
+    },
+    "dashboard/src/hooks/use-trend-data.ts": {
+      "colors": 1,
+      "rawText": 0,
+      "rawTextTokens": []
+    },
+    "dashboard/src/pages/DashboardPage.jsx": {
+      "colors": 1,
+      "rawText": 0,
+      "rawTextTokens": []
     }
   }
 }

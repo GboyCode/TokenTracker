@@ -902,6 +902,18 @@ export function DashboardPage({
     refreshUsageLimits,
   ]);
 
+  // Hold the latest aggregate refresher in a ref so the mount / auto-refresh
+  // effects below can call it WITHOUT listing it as a dependency.
+  // `refreshUsageStats` changes identity whenever any child refresh callback
+  // does — notably `refreshTrend`, whose identity flips on every new `daily`
+  // array reference. If the effects depended on it, the local-reload effect
+  // would re-fire a full refresh on every render, and each refresh mints a new
+  // `daily`, closing an infinite usage-refresh loop (#360).
+  const refreshUsageStatsRef = useRef(refreshUsageStats);
+  useEffect(() => {
+    refreshUsageStatsRef.current = refreshUsageStats;
+  }, [refreshUsageStats]);
+
   // The DMG starts its embedded server with --no-sync, so a page reload used
   // to fetch the same stale queue again. Refresh all local log/database sources
   // (Claude, Gemini, OpenCode, Codex, etc.) without doing cloud upload, Cursor
@@ -921,7 +933,7 @@ export function DashboardPage({
     let active = true;
     localReloadSyncPromiseRef.current
       .then(() => {
-        if (active) return refreshUsageStats();
+        if (active) return refreshUsageStatsRef.current();
         return undefined;
       })
       .catch((error) => {
@@ -930,7 +942,7 @@ export function DashboardPage({
     return () => {
       active = false;
     };
-  }, [isLocalMode, mockEnabled, accountView, refreshUsageStats]);
+  }, [isLocalMode, mockEnabled, accountView]);
 
   // Provider hooks update the queue quickly, while the native server also
   // performs a once-per-minute all-source fallback scan. Re-read the local
@@ -939,12 +951,12 @@ export function DashboardPage({
   useEffect(() => {
     if (!isLocalMode || mockEnabled || accountView) return undefined;
     const autoRefresh = startLocalUsageAutoRefresh({
-      refresh: refreshUsageStats,
+      refresh: () => refreshUsageStatsRef.current(),
       onError: (error) =>
         console.warn("[DashboardPage] Automatic usage refresh failed:", error),
     });
     return () => autoRefresh.stop();
-  }, [isLocalMode, mockEnabled, accountView, refreshUsageStats]);
+  }, [isLocalMode, mockEnabled, accountView]);
 
   const handleUsageRefresh = useCallback(async () => {
     setManualSyncLoading(true);
