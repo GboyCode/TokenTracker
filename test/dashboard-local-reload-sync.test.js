@@ -14,7 +14,7 @@ test("local dashboard reload scans all local sources before refreshing usage sna
   );
   assert.match(
     source,
-    /localReloadSyncPromiseRef\.current[\s\S]*\.then\(\(\) => \{[\s\S]*refreshUsageStats\(\)/,
+    /localReloadSyncPromiseRef\.current[\s\S]*\.then\(\(\) => \{[\s\S]*refreshUsageStats(?:Ref\.current)?\(\)/,
     "usage endpoints should be re-read after the reload-triggered sync finishes",
   );
 });
