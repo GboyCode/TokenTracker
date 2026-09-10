@@ -3304,6 +3304,123 @@ describe("loadAntigravityCredentials", () => {
     assert.equal(creds.accessToken, "ya29.keychain");
     assert.equal(creds.source, "keychain");
   });
+
+  it("prefers a fresh keychain token over an expired file", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-fresh-kc-"));
+    try {
+      writeAntigravityOauthToken(tmp, { expiry: "2020-01-01T00:00:00Z" });
+      const creds = loadAntigravityCredentials({
+        home: tmp,
+        platform: "darwin",
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+        securityRunner() {
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              token: {
+                access_token: "ya29.keychain-fresh",
+                refresh_token: "1//keychain-fresh",
+                expiry: "2099-01-01T00:00:00Z",
+              },
+            }),
+          };
+        },
+      });
+      assert.equal(creds.source, "keychain");
+      assert.equal(creds.path, null);
+      assert.equal(creds.accessToken, "ya29.keychain-fresh");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers a fresh file over an expired keychain token", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-fresh-file-"));
+    try {
+      const credPath = writeAntigravityOauthToken(tmp);
+      const creds = loadAntigravityCredentials({
+        home: tmp,
+        platform: "darwin",
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+        securityRunner() {
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              token: {
+                access_token: "ya29.keychain-stale",
+                refresh_token: "1//keychain-stale",
+                expiry: "2020-01-01T00:00:00Z",
+              },
+            }),
+          };
+        },
+      });
+      assert.equal(creds.source, "file");
+      assert.equal(creds.path, credPath);
+      assert.equal(creds.accessToken, "ya29.agy-live");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("picks the newest expired credential when every candidate is stale", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-all-stale-"));
+    try {
+      writeAntigravityOauthToken(tmp, {
+        access_token: "ya29.older-file",
+        expiry: "2020-01-01T00:00:00Z",
+      });
+      const newerPath = path.join(tmp, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+      fs.mkdirSync(path.dirname(newerPath), { recursive: true });
+      fs.writeFileSync(newerPath, JSON.stringify({
+        token: {
+          access_token: "ya29.newer-file",
+          refresh_token: "1//newer-file",
+          expiry: "2024-06-01T00:00:00Z",
+        },
+      }), "utf8");
+      const creds = loadAntigravityCredentials({
+        home: tmp,
+        platform: "linux",
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+      });
+      assert.equal(creds.source, "file");
+      assert.equal(creds.path, newerPath);
+      assert.equal(creds.accessToken, "ya29.newer-file");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers an unknown-expiry credential over expired ones", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-unknown-expiry-"));
+    try {
+      writeAntigravityOauthToken(tmp, {
+        access_token: "ya29.expired-file",
+        expiry: "2020-01-01T00:00:00Z",
+      });
+      const unknownPath = path.join(tmp, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+      fs.mkdirSync(path.dirname(unknownPath), { recursive: true });
+      fs.writeFileSync(unknownPath, JSON.stringify({
+        token: {
+          access_token: "ya29.unknown-expiry",
+          refresh_token: "1//unknown-expiry",
+        },
+      }), "utf8");
+      const creds = loadAntigravityCredentials({
+        home: tmp,
+        platform: "linux",
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+      });
+      assert.equal(creds.source, "file");
+      assert.equal(creds.path, unknownPath);
+      assert.equal(creds.accessToken, "ya29.unknown-expiry");
+      assert.equal(creds.expiryMs, null);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
 });
 
 describe("Antigravity helpers", () => {

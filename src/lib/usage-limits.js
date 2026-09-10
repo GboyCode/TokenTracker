@@ -3156,18 +3156,41 @@ function parseAntigravityCredentialPayload(raw) {
   };
 }
 
-function loadAntigravityCredentialsFromFiles({ home } = {}) {
+function isAntigravityCredentialFresh(creds, nowMs) {
+  return creds.expiryMs != null && creds.expiryMs > nowMs + ANTIGRAVITY_TOKEN_REFRESH_SKEW_MS;
+}
+
+function pickLatestAntigravityExpiry(candidates) {
+  let best = candidates[0];
+  for (let i = 1; i < candidates.length; i += 1) {
+    const expiry = candidates[i].expiryMs;
+    if (expiry != null && (best.expiryMs == null || expiry > best.expiryMs)) {
+      best = candidates[i];
+    }
+  }
+  return best;
+}
+
+function pickAntigravityCredentials(candidates, nowMs) {
+  if (candidates.length === 0) return null;
+  const fresh = candidates.filter((creds) => isAntigravityCredentialFresh(creds, nowMs));
+  if (fresh.length > 0) return pickLatestAntigravityExpiry(fresh);
+  const unknown = candidates.filter((creds) => creds.expiryMs == null);
+  if (unknown.length > 0) return unknown[0];
+  return pickLatestAntigravityExpiry(candidates);
+}
+
+function collectAntigravityFileCredentials({ home } = {}) {
+  const candidates = [];
   for (const credPath of listAntigravityCredentialPaths(home)) {
     try {
       const parsed = parseAntigravityCredentialPayload(fs.readFileSync(credPath, "utf8"));
-      if (parsed) {
-        return { ...parsed, source: "file", path: credPath };
-      }
+      if (parsed) candidates.push({ ...parsed, source: "file", path: credPath });
     } catch {
       // missing or unreadable
     }
   }
-  return null;
+  return candidates;
 }
 
 function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
@@ -3198,14 +3221,18 @@ function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
   }
 }
 
-function loadAntigravityCredentials({ home, platform = process.platform, securityRunner } = {}) {
-  const fromFile = loadAntigravityCredentialsFromFiles({ home });
-  if (fromFile) return fromFile;
-  if (platform !== "darwin" && typeof securityRunner !== "function") return null;
-  const raw = readAntigravityKeychainRaw({ securityRunner });
-  const parsed = parseAntigravityCredentialPayload(raw);
-  if (!parsed) return null;
-  return { ...parsed, source: "keychain", path: null };
+function loadAntigravityCredentials({
+  home,
+  platform = process.platform,
+  securityRunner,
+  nowMs = Date.now(),
+} = {}) {
+  const candidates = collectAntigravityFileCredentials({ home });
+  if (platform === "darwin" || typeof securityRunner === "function") {
+    const parsed = parseAntigravityCredentialPayload(readAntigravityKeychainRaw({ securityRunner }));
+    if (parsed) candidates.push({ ...parsed, source: "keychain", path: null });
+  }
+  return pickAntigravityCredentials(candidates, nowMs);
 }
 
 function persistAntigravityCredentials(creds, next, { nowMs = Date.now() } = {}) {
@@ -3346,7 +3373,7 @@ async function fetchAntigravityRemoteLimits({
   nowMs = Date.now(),
   signal,
 } = {}) {
-  const creds = loadAntigravityCredentials({ home, platform, securityRunner });
+  const creds = loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
   if (!creds) return null;
 
   const loadWithToken = async (accessToken) => {
@@ -3378,7 +3405,7 @@ async function fetchAntigravityRemoteLimits({
 function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, remoteError } = {}) {
   const cached = readAntigravityLimitsCache({ home, nowMs });
   if (cached) return cached;
-  const creds = loadAntigravityCredentials({ home, platform, securityRunner });
+  const creds = loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
   if (!hasAntigravityInstallEvidence({ home }) && !creds) {
     return { configured: false };
   }
