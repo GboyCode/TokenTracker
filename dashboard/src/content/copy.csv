@@ -545,10 +545,13 @@ settings.appearance.theme.system,ui,SettingsPage,SettingsPage,theme_system,"Syst
 settings.appearance.currency.label,ui,SettingsPage,SettingsPage,currency_label,"Currency",,active
 settings.appearance.currency.hint,ui,SettingsPage,SettingsPage,currency_hint,"Select the display currency for usage costs.",,active
 settings.appearance.token_format.label,ui,SettingsPage,SettingsPage,token_format_label,"Token numbers",,active
-settings.appearance.token_format.hint,ui,SettingsPage,SettingsPage,token_format_hint,"Apply K/M/B, Chinese units, or full numbers everywhere. Hover compact values to see the exact number.",,active
+settings.appearance.token_format.hint,ui,SettingsPage,SettingsPage,token_format_hint,"Apply compact or full numbers everywhere. Hover compact values to see the exact number.",,active
 settings.appearance.token_format.compact,ui,SettingsPage,SettingsPage,token_format_compact,"Compact",,active
-settings.appearance.token_format.chinese,ui,SettingsPage,SettingsPage,token_format_chinese,"Chinese units (Wan/Yi)",,active
 settings.appearance.token_format.full,ui,SettingsPage,SettingsPage,token_format_full,"Full",,active
+settings.appearance.token_unit.label,ui,SettingsPage,SettingsPage,token_unit_label,"Number units",,active
+settings.appearance.token_unit.hint,ui,SettingsPage,SettingsPage,token_unit_hint,"Compact numbers use K/M/B or Wan/Yi units. Full numbers ignore units.",,active
+settings.appearance.token_unit.english,ui,SettingsPage,SettingsPage,token_unit_english,"K/M/B",,active
+settings.appearance.token_unit.chinese,ui,SettingsPage,SettingsPage,token_unit_chinese,"Wan/Yi",,active
 settings.appearance.currency.opt.usd,ui,SettingsPage,SettingsPage,currency_opt_usd,"USD ($)",,active
 settings.appearance.currency.opt.eur,ui,SettingsPage,SettingsPage,currency_opt_eur,"EUR (€)",,active
 settings.appearance.currency.opt.gbp,ui,SettingsPage,SettingsPage,currency_opt_gbp,"GBP (£)",,active
