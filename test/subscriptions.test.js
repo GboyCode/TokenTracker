@@ -6,6 +6,7 @@ const { test } = require("node:test");
 
 const {
   collectLocalSubscriptions,
+  detectClaudeCodeCredentialsPresence,
   detectClaudeCodeSubscriptionDetails,
   readClaudeCodeAccessToken,
 } = require("../src/lib/subscriptions");
@@ -509,4 +510,37 @@ test("collectLocalSubscriptions includes OpenClaw when session plugin is configu
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
+});
+
+test("Claude keychain reads and presence select the active account, never a stale service-only item", () => {
+  const calls = [];
+  const securityRunner = (_cmd, args) => {
+    calls.push(args);
+    const active = args.includes("-a") && args[args.indexOf("-a") + 1] === "active-user";
+    return { status: 0, stdout: JSON.stringify({ claudeAiOauth: { accessToken: active ? "active-token" : "stale-token", subscriptionType: active ? "max" : "pro" } }) };
+  };
+  const opts = { platform: "darwin", env: { USER: "active-user" }, securityRunner };
+  assert.equal(readClaudeCodeAccessToken(opts), "active-token");
+  assert.equal(detectClaudeCodeSubscriptionDetails(opts).planType, "max");
+  assert.equal(detectClaudeCodeCredentialsPresence(opts).planType, "present");
+  assert.equal(calls.length, 3);
+  for (const args of calls) assert.equal(args[args.indexOf("-a") + 1], "active-user");
+});
+
+test("Claude keychain does not fall back to an unrelated stale account when the selected item is absent", () => {
+  const calls = [];
+  const result = readClaudeCodeAccessToken({ platform: "darwin", env: { USER: "active-user" }, securityRunner: (_cmd, args) => {
+    calls.push(args);
+    return args.includes("-a") ? { status: 44 } : { status: 0, stdout: '{"claudeAiOauth":{"accessToken":"stale-token"}}' };
+  } });
+  assert.equal(result, null);
+  assert.equal(calls.length, 1);
+});
+
+test("Claude keychain account mirrors environment, OS fallback and upstream username validation", () => {
+  const { resolveClaudeKeychainAccount } = require("../src/lib/subscriptions");
+  assert.equal(resolveClaudeKeychainAccount({ env: { USER: "named-user" }, userInfo: () => ({ username: "os-user" }) }), "named-user");
+  assert.equal(resolveClaudeKeychainAccount({ env: {}, userInfo: () => ({ username: "os-user" }) }), "os-user");
+  assert.equal(resolveClaudeKeychainAccount({ env: { USER: "invalid user" } }), "claude-code-user");
+  assert.equal(resolveClaudeKeychainAccount({ env: {}, userInfo: () => { throw new Error("no user"); } }), "claude-code-user");
 });
