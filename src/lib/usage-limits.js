@@ -117,6 +117,8 @@ const CLAUDE_RATE_LIMIT_FILE = "claude-usage-rate-limit.json";
 const KIRO_CREDITS_SIDECAR_FILE = "kiro-credits.json";
 const CLAUDE_RATE_LIMIT_DEFAULT_COOLDOWN_SEC = 5 * 60;
 const CLAUDE_RATE_LIMIT_MAX_COOLDOWN_SEC = 60 * 60;
+// Prefix only — enough to notice a token rotation, never the secret itself.
+const CLAUDE_RATE_LIMIT_TOKEN_FINGERPRINT_LEN = 16;
 
 function clampPercent(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -2574,22 +2576,48 @@ function resolveClaudeRateLimitPath({ home } = {}) {
   return path.join(home || os.homedir(), ".tokentracker", "tracker", CLAUDE_RATE_LIMIT_FILE);
 }
 
+function claudeRateLimitTokenFingerprint(accessToken) {
+  if (typeof accessToken !== "string" || !accessToken) return null;
+  return crypto
+    .createHash("sha256")
+    .update(accessToken, "utf8")
+    .digest("hex")
+    .slice(0, CLAUDE_RATE_LIMIT_TOKEN_FINGERPRINT_LEN);
+}
+
 // Returns the cooldown expiry in ms if a 429 cooldown is still active, else null.
-function readClaudeRateLimitRetryAtMs({ home, nowMs = Date.now() } = {}) {
+// A cooldown armed for a previous access token must not outlive that token:
+// after the user refreshes Claude Code login, forceRefresh still cannot punch
+// through this file, so a mismatched fingerprint is treated as no cooldown.
+function readClaudeRateLimitRetryAtMs({ home, nowMs = Date.now(), accessToken } = {}) {
+  const cachePath = resolveClaudeRateLimitPath({ home });
   try {
-    const parsed = JSON.parse(fs.readFileSync(resolveClaudeRateLimitPath({ home }), "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
     const retryAtMs = parseTimeMs(parsed?.retry_at);
-    if (retryAtMs !== null && retryAtMs > nowMs) return retryAtMs;
+    if (retryAtMs === null || retryAtMs <= nowMs) return null;
+    const storedFingerprint = typeof parsed.token_fingerprint === "string"
+      ? parsed.token_fingerprint
+      : null;
+    if (storedFingerprint) {
+      const currentFingerprint = claudeRateLimitTokenFingerprint(accessToken);
+      if (!currentFingerprint || currentFingerprint !== storedFingerprint) {
+        clearClaudeRateLimitCooldown({ home });
+        return null;
+      }
+    }
+    return retryAtMs;
   } catch (_error) {}
   return null;
 }
 
-function writeClaudeRateLimitCooldown(retryAfterSec, { home, nowMs = Date.now() } = {}) {
+function writeClaudeRateLimitCooldown(retryAfterSec, { home, nowMs = Date.now(), accessToken } = {}) {
   const sec = Number.isFinite(retryAfterSec) && retryAfterSec > 0
     ? Math.min(retryAfterSec, CLAUDE_RATE_LIMIT_MAX_COOLDOWN_SEC)
     : CLAUDE_RATE_LIMIT_DEFAULT_COOLDOWN_SEC;
   const cachePath = resolveClaudeRateLimitPath({ home });
   const payload = { retry_at: new Date(nowMs + sec * 1000).toISOString() };
+  const fingerprint = claudeRateLimitTokenFingerprint(accessToken);
+  if (fingerprint) payload.token_fingerprint = fingerprint;
   try {
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
     const tmpPath = `${cachePath}.${process.pid}.tmp`;
@@ -3706,7 +3734,9 @@ async function fetchUsageLimitsUncached({
 
   // Skip the upstream Claude call entirely while a 429 cooldown is active — calling again
   // just renews the penalty. The result handling below serves cache or a cooldown message.
-  const claudeRetryAtMs = claudeToken ? readClaudeRateLimitRetryAtMs({ home, nowMs }) : null;
+  const claudeRetryAtMs = claudeToken
+    ? readClaudeRateLimitRetryAtMs({ home, nowMs, accessToken: claudeToken })
+    : null;
   // Also avoid cross-process hammering after a recent successful read: embedded-server
   // restarts and background polls read the disk cache instead of spending another Claude
   // OAuth usage request. An explicit user refresh (refresh=1 → forceRefresh) punches
@@ -3878,13 +3908,14 @@ async function fetchUsageLimitsUncached({
     // surface an accurate "retry in ~Nm" message rather than the misleading hardcoded one.
     const reason = claudeResult?.reason;
     if (reason?.code === "RATE_LIMITED") {
-      writeClaudeRateLimitCooldown(reason.retryAfterSec, { home, nowMs });
+      writeClaudeRateLimitCooldown(reason.retryAfterSec, { home, nowMs, accessToken: claudeToken });
     }
     const cached = readClaudeLimitsCache({ home, nowMs });
     if (cached) {
       claude = cached;
     } else {
-      const retryAtMs = readClaudeRateLimitRetryAtMs({ home, nowMs }) || claudeRetryAtMs;
+      const retryAtMs = readClaudeRateLimitRetryAtMs({ home, nowMs, accessToken: claudeToken })
+        || claudeRetryAtMs;
       claude = {
         configured: true,
         error: retryAtMs
@@ -3907,7 +3938,11 @@ async function fetchUsageLimitsUncached({
   // cool-down just armed by this cycle's 429 is included; a successful read above
   // cleared the file, so this is null in the happy path.
   if (claude.configured) {
-    const claudeCooldownMs = readClaudeRateLimitRetryAtMs({ home, nowMs });
+    const claudeCooldownMs = readClaudeRateLimitRetryAtMs({
+      home,
+      nowMs,
+      accessToken: claudeToken,
+    });
     if (claudeCooldownMs) {
       claude.retry_at = new Date(claudeCooldownMs).toISOString();
     }

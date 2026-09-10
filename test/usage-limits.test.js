@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const { describe, it } = require("node:test");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -1849,6 +1850,52 @@ describe("getUsageLimits", () => {
 
       assert.equal(result.claude.configured, true);
       assert.match(result.claude.error, /token expired/i);
+      assert.equal(result.claude.auth_action_required, "reauth");
+      assert.equal(usageApiCalled, false);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the Claude usage API when the local token is already expired", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-local-expired-"));
+    try {
+      const nowMs = Date.now();
+      const claudeDir = path.join(tmp, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(claudeDir, ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "locally-expired-token",
+            expiresAt: nowMs - 60_000,
+          },
+        }),
+      );
+
+      let usageApiCalled = false;
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 1000,
+        securityRunner() {
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url) {
+          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+            usageApiCalled = true;
+            throw new Error("must not call the usage API for a locally expired token");
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+
+      assert.equal(result.claude.configured, true);
       assert.equal(result.claude.auth_action_required, "reauth");
       assert.equal(usageApiCalled, false);
     } finally {
@@ -4588,6 +4635,139 @@ describe("getUsageLimits Claude stale fallback", () => {
       assert.equal(claudeCalls, 0, "forceRefresh must never bypass the 429 cooldown");
       assert.equal(limited.claude.configured, true);
       assert.match(limited.claude.error, /rate limited \(429\)/);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("drops a fingerprinted cooldown when the access token rotates", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-rotate-"));
+    try {
+      makeClaudeHome(tmp);
+
+      const first = await runLimits(tmp, () => Promise.resolve({
+        ok: false,
+        status: 429,
+        headers: { get: (h) => (h === "retry-after" ? "600" : null) },
+      }));
+      assert.match(first.claude.error, /retry in ~10m/);
+
+      const cooldownPath = path.join(tmp, ".tokentracker", "tracker", "claude-usage-rate-limit.json");
+      const cooldown = JSON.parse(fs.readFileSync(cooldownPath, "utf8"));
+      assert.match(cooldown.token_fingerprint, /^[0-9a-f]{16}$/);
+      assert.equal(JSON.stringify(cooldown).includes("claude-token"), false);
+
+      fs.writeFileSync(
+        path.join(tmp, ".claude", ".credentials.json"),
+        JSON.stringify({ claudeAiOauth: { accessToken: "claude-token-rotated" } }),
+      );
+
+      let claudeCalls = 0;
+      resetUsageLimitsCache();
+      const retried = await runLimits(tmp, () => {
+        claudeCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            five_hour: { utilization: 7, resets_at: FUTURE_RESET },
+            seven_day: { utilization: 8, resets_at: FUTURE_RESET },
+            seven_day_opus: null,
+          }),
+        });
+      });
+
+      assert.equal(claudeCalls, 1, "a new token must be allowed to retry immediately");
+      assert.equal(retried.claude.error, null);
+      assert.equal(retried.claude.five_hour.utilization, 7);
+      assert.equal(fs.existsSync(cooldownPath), false);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a fingerprinted cooldown while the same token is still armed", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-match-"));
+    try {
+      makeClaudeHome(tmp);
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(trackerDir, "claude-usage-rate-limit.json"),
+        JSON.stringify({
+          retry_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+          token_fingerprint: createHash("sha256").update("claude-token", "utf8").digest("hex").slice(0, 16),
+        }),
+      );
+
+      let claudeCalls = 0;
+      const limited = await runLimits(tmp, () => {
+        claudeCalls += 1;
+        throw new Error("Claude endpoint must not be called during a matching cooldown");
+      });
+
+      assert.equal(claudeCalls, 0);
+      assert.match(limited.claude.error, /rate limited \(429\)/);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("honors a pre-fingerprint cooldown file as still active", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-legacy-"));
+    try {
+      makeClaudeHome(tmp);
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(trackerDir, "claude-usage-rate-limit.json"),
+        JSON.stringify({ retry_at: new Date(Date.now() + 30 * 60 * 1000).toISOString() }),
+      );
+
+      let claudeCalls = 0;
+      const limited = await runLimits(tmp, () => {
+        claudeCalls += 1;
+        throw new Error("legacy cooldown files without a fingerprint must still block");
+      });
+
+      assert.equal(claudeCalls, 0);
+      assert.match(limited.claude.error, /rate limited \(429\)/);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a naturally expired cooldown file in place", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-elapsed-"));
+    try {
+      makeClaudeHome(tmp);
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      const cooldownPath = path.join(trackerDir, "claude-usage-rate-limit.json");
+      fs.writeFileSync(
+        cooldownPath,
+        JSON.stringify({
+          retry_at: new Date(Date.now() - 1000).toISOString(),
+          token_fingerprint: createHash("sha256").update("claude-token", "utf8").digest("hex").slice(0, 16),
+        }),
+      );
+
+      let claudeCalls = 0;
+      await runLimits(tmp, () => {
+        claudeCalls += 1;
+        return Promise.resolve({ ok: false, status: 500 });
+      });
+
+      assert.equal(claudeCalls, 1, "an elapsed cooldown must not block a retry");
+      assert.equal(fs.existsSync(cooldownPath), true, "elapsed cooldown files are left for the next write/clear");
     } finally {
       resetUsageLimitsCache();
       fs.rmSync(tmp, { recursive: true, force: true });

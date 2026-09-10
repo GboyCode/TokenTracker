@@ -19,6 +19,9 @@ const CLAUDE_CODE_CREDENTIALS_FILE = ".credentials.json";
 // Platforms where Claude Code stores credentials in the plain JSON file above
 // rather than the macOS Keychain.
 const CLAUDE_CODE_CREDENTIALS_FILE_PLATFORMS = new Set(["linux", "win32"]);
+// Refresh slightly before wall-clock expiry so Limits does not spend a request
+// that Anthropic answers with 429 for a real-but-expired Claude Code token.
+const CLAUDE_TOKEN_EXPIRY_SKEW_MS = 60_000;
 
 function usesClaudeCodeCredentialsFile(platform) {
   return CLAUDE_CODE_CREDENTIALS_FILE_PLATFORMS.has(platform);
@@ -270,6 +273,31 @@ function detectClaudeCodeCredentialsPresence({ platform = process.platform, secu
   return null;
 }
 
+function parseClaudeOauthExpiryMs(value) {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    if (value <= 0) return 0;
+    return value < 1e12 ? value * 1000 : value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) return parseClaudeOauthExpiryMs(Number(trimmed));
+    const ms = Date.parse(trimmed);
+    return Number.isFinite(ms) ? ms : null;
+  }
+  return null;
+}
+
+function extractClaudeCodeAccessToken(payload, nowMs = Date.now()) {
+  const oauth = payload?.claudeAiOauth;
+  const token = normalizeString(oauth?.accessToken);
+  if (!token) return null;
+  const expiresAtMs = parseClaudeOauthExpiryMs(oauth?.expiresAt);
+  if (expiresAtMs != null && expiresAtMs <= nowMs + CLAUDE_TOKEN_EXPIRY_SKEW_MS) return null;
+  return token;
+}
+
 function extractClaudeKeychainSubscription(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
 
@@ -374,14 +402,21 @@ async function detectOpenclawSessionIntegration({ home, env }) {
   };
 }
 
-function readClaudeCodeAccessToken({ platform = process.platform, securityRunner, home, fsReader, env } = {}) {
+function readClaudeCodeAccessToken({
+  platform = process.platform,
+  securityRunner,
+  home,
+  fsReader,
+  env,
+  nowMs = Date.now(),
+} = {}) {
   if (platform === "darwin") {
     for (const service of CLAUDE_CODE_KEYCHAIN_SERVICES) {
       try {
         const raw = readMacosKeychainPassword({ service, securityRunner, env });
         if (!raw) continue;
-        const payload = JSON.parse(raw);
-        return normalizeString(payload?.claudeAiOauth?.accessToken);
+        const token = extractClaudeCodeAccessToken(JSON.parse(raw), nowMs);
+        if (token) return token;
       } catch (_e) {
         continue;
       }
@@ -396,8 +431,7 @@ function readClaudeCodeAccessToken({ platform = process.platform, securityRunner
   const raw = readClaudeCodeCredentialsFile({ home, fsReader });
   if (!raw) return null;
   try {
-    const payload = JSON.parse(raw);
-    return normalizeString(payload?.claudeAiOauth?.accessToken);
+    return extractClaudeCodeAccessToken(JSON.parse(raw), nowMs);
   } catch (_e) {
     return null;
   }
