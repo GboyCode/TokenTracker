@@ -50,7 +50,7 @@ npx tokentracker-cli
 **30초 안에 얻는 것:**
 - 📊 사용 추세, 모델별 분석, 비용 분석을 보여주는 `localhost:7680`의 로컬 대시보드
 - 🔌 설치된 모든 지원 AI 도구에 대한 hook 자동 감지
-- 🏠 100% 로컬 — 계정 없음, API Key 없음, 네트워크 호출 없음 (옵션 리더보드 제외)
+- 🏠 로컬 우선 — 로컬 머신에서 로그를 직접 파싱하며 계정이나 API Key가 필요하지 않습니다
 - 🧩 *옵션:* 250+개의 공개 Skill을 둘러보고 Claude · Codex · AStudio · Gemini · OpenCode · Hermes 간에 동기화할 수 있는 Skills 탭
 
 > **네이티브 데스크톱 앱이 필요하다면?**
@@ -89,7 +89,7 @@ brew install xiufengsun/tokentracker/tokentracker
 ## ✨ 기능
 
 - 🔌 **37개의 AI 도구 기본 지원** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio
-- 🏠 **100% 로컬** — 토큰 데이터가 기기를 떠나지 않습니다. 계정 없음, API Key 없음.
+- 🏠 **로컬 우선** — 내 컴퓨터에서 실행됩니다. 계정이나 API Key 없이 로그를 로컬에서 파싱합니다.
 - 🚀 **제로 설정** — 첫 실행 시 Hook 자동 설치. 0에서 대시보드까지 30초.
 - 📊 **아름다운 대시보드** — 사용 추세, 모델별 비용 분석, GitHub 스타일 활동 히트맵, 프로젝트 귀속 정보
 - 🖥️ **네이티브 데스크톱 앱** — macOS 메뉴바(위젯 포함)와 Windows 시스템 트레이. 각각 임베디드 서버와 네이티브 WebView 대시보드를 제공합니다
@@ -98,9 +98,9 @@ brew install xiufengsun/tokentracker/tokentracker
 - 🟢 **서비스 상태 페이지** — 8개 공식 provider 상태 페이지의 운영 및 장애 상태 표시
 - 💰 **비용 엔진** — [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)을 통해 2,200+개 모델 가격 책정 (매일 자동 갱신) + 틈새 도구 (Kiro, Cursor Composer, Kimi, CodeBuddy hy3)를 위한 수동 큐레이션 오버라이드; 24시간 디스크 캐시 + 번들된 오프라인 스냅샷으로 인터넷 없이도 정확한 USD 표시. 벤더가 공식 가격을 공개하지 않은 모델 (예: Tencent hy3-preview)은 토큰만 추적되며 벤더가 요율을 공개할 때까지 비용은 $0으로 표시됩니다.
 - 🌐 **옵션 리더보드** — 전 세계 개발자들과 비교; 컬럼을 드래그하여 관심 있는 프로바이더에 집중 (옵트인, 참여하려면 사인인 필요)
-- 🔄 **기기 간 계정 뷰** — 클라우드 동기화를 켜면 작업하는 모든 기기(노트북 + 데스크톱 + 서버)의 사용량을 하나의 뷰로 통합 — 총량·트렌드·히트맵·모델 분석을 모두 기기 통합으로 집계 (옵트인, 사인인 필요; 기본 로컬 전용 경험은 즉시·오프라인 유지)
+- 🔄 **기기 간 계정 뷰** — 클라우드 동기화를 켜면 작업하는 모든 기기(노트북 + 데스크톱 + 서버)의 사용량을 하나의 뷰로 통합 — 총량·트렌드·히트맵·모델 분석을 모두 기기 통합으로 집계 (옵트인, 사인인 필요)
 - 🧩 **옵션 Skills 탭** — `anthropics/skills`, `ComposioHQ/awesome-claude-skills`, `skills.sh` 그리고 직접 추가한 임의의 GitHub 저장소에서 250+개의 공개 Skill을 둘러보고, 타겟 이름을 지정해 Claude / Codex / AStudio / Gemini / OpenCode / Hermes에 동기화. 원클릭 Undo 지원.
-- 🔒 **프라이버시 우선** — 토큰 수치와 타임스탬프만. 프롬프트, 응답, 파일 내용은 절대 다루지 않음.
+- 🔒 **프라이버시 우선** — 로컬 사용량 지표(토큰 수치, 타임스탬프, 모델명)만 기록합니다. 프롬프트, 모델 응답, 코드는 절대 기기 밖으로 나가지 않습니다.
 
 ---
 
@@ -218,15 +218,21 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ---
 
-## 🆚 왜 TokenTracker인가?
+## 🆚 왜 TokenTracker인가? <a id="ccusage-alternative"></a>
 
-|                          | **TokenTracker** | ccusage     | Cursor stats |
-|--------------------------|:---:|:---:|:---:|
-| **지원하는 AI 도구 수**   | **37**           | 1 (Claude)  | 1 (Cursor)   |
-| **로컬 우선, 계정 불필요** | ✅            | ✅           | ❌            |
-| **네이티브 데스크톱 앱** | ✅ macOS + Windows | ❌          | ❌            |
-| **데스크톱 위젯**        | ✅ 4종            | ❌           | ❌            |
-| **레이트 제한 추적**     | ✅ 14개 프로바이더 | ❌           | Cursor 전용  |
+> **위젯과 시각적 대시보드를 갖춘 데스크톱 환경을 찾고 계신가요?** TokenTracker는 여러 AI 코딩 도구에 대한 로컬 우선 파싱과 네이티브 데스크톱 앱, 데스크톱 위젯, 프로바이더 통합 사용량 한도 모니터링, 선택형 클라우드 동기화를 결합했습니다.
+
+| 기능 | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
+|---|:---:|:---:|:---:|
+| **지원하는 AI 도구 수** | **37** | 멀티 에이전트 지원 | 멀티 에이전트 지원 |
+| **기본 인터페이스** | 네이티브 데스크톱 앱 & 웹 대시보드 | 터미널 CLI | 터미널 TUI & CLI |
+| **로컬 우선 분석** | ✅ | ✅ | ✅ |
+| **네이티브 데스크톱 앱** | ✅ macOS, Windows, Linux | ❌ | ❌ |
+| **데스크톱 위젯** | ✅ 4종 | ❌ | ❌ |
+| **레이트 제한 추적** | ✅ 14개 프로바이더 | 제한적 (Claude 블록/사용량) | 다수 프로바이더 지원 |
+| **터미널 분석** | 기본 CLI (`status`, `--json`) | 강력한 CLI 리포팅 | 풍부한 인터랙티브 TUI & CLI |
+| **JSON 내보내기** | ✅ | ✅ | ✅ |
+| **공개 리더보드** | 선택형 (옵트인) | ❌ | 선택형 (`submit`) |
 
 ---
 
@@ -245,22 +251,24 @@ flowchart LR
 
 1. AI CLI 도구가 평소 사용 중에 로그를 생성
 2. 경량 hook이 변경을 감지하고 동기화를 트리거 (Cursor는 hook 대신 API 사용)
-3. 토큰 수치는 로컬에서 파싱 — 프롬프트나 응답 내용은 절대 다루지 않음
+3. 토큰 수치를 로컬에서 파싱 — 프롬프트, 모델 응답, 코드는 절대 저장하거나 업로드하지 않음
 4. 30분 UTC 버킷으로 집계
 5. 대시보드, 메뉴바 앱, 위젯 모두 동일한 로컬 스냅샷을 읽음
 
 ---
 
-## 🛡️ 프라이버시
+## 🛡️ 개인정보 보호
 
 > 📄 **[전체 개인정보 처리방침](docs/PRIVACY.md)**(영문) — 앱이 보낼 수 있는 모든 네트워크 요청, 각 요청이 전송하는 내용, 끄는 방법을 모두 정리했습니다.
 
-| 보호 | 설명 |
+TokenTracker는 사용량 데이터를 로컬에서 처리합니다. 프롬프트, 코드, 모델 응답을 수집하거나 업로드하지 않습니다.
+
+| 보호 항목 | 설명 |
 |---|---|
-| **콘텐츠 업로드 없음** | 토큰 수치와 타임스탬프만. 프롬프트, 응답, 파일 내용은 절대 다루지 않습니다. |
-| **기본적으로 로컬 전용** | 모든 데이터는 기기에 머뭅니다. 리더보드는 완전히 옵트인. |
-| **감사 가능** | 오픈 소스. [`src/lib/rollout.js`](src/lib/rollout.js)를 읽어보세요 — 숫자와 타임스탬프뿐입니다. |
-| **익명 사용 통계만** | 외부 전송은 익명 2가지뿐: (1) 하루 최대 1회 하트비트——머신 ID의 단방향 해시, 앱 버전, OS 플랫폼, 실행 형태(cli/macos/windows/linux); (2) 익명 대시보드 페이지/기능 이벤트(PostHog——autocapture와 세션 녹화 비활성화, 브라우저 Do-Not-Track 존중). 토큰 수, 모델명, 프롬프트, 경로는 절대 포함되지 않습니다. [`src/lib/telemetry.js`](src/lib/telemetry.js)와 [`dashboard/src/lib/analytics.js`](dashboard/src/lib/analytics.js)에서 감사 가능하며 `TOKENTRACKER_NO_TELEMETRY=1` 또는 `DO_NOT_TRACK=1` 하나로 둘 다 비활성화됩니다. |
+| **코드 및 프롬프트 미수집** | TokenTracker는 로컬 로그 파일을 파싱하여 토큰 수치와 타임스탬프를 추출합니다. 프롬프트, 응답 본문, 코드, 대화 내용은 절대 저장하거나 업로드하지 않습니다. |
+| **기본 로컬 우선** | 사용량 추적은 기기 내에서 로컬로 실행됩니다. 계정, 로그인, API Key가 필요하지 않습니다. 클라우드 동기화와 공개 리더보드는 순수 옵트인입니다. |
+| **감사 가능** | 오픈 소스. [`src/lib/rollout.js`](src/lib/rollout.js)를 직접 확인하세요 — 숫자, 타임스탬프, 모델명만 추출합니다. |
+| **투명한 네트워크 활동** | [개인정보 처리방침](docs/PRIVACY.md)에 상세히 명시되어 있습니다. 기본 네트워크 요청은 프로바이더 잔여 한도 확인(기기에 이미 존재하는 자격 증명 사용), GitHub 스타 수 확인 및 버전 업데이트 확인, 모델 가격 데이터 갱신(`raw.githubusercontent.com`), 익명 텔레메트리(일일 하트비트 및 PostHog 페이지뷰, 둘 다 `TOKENTRACKER_NO_TELEMETRY=1` 또는 `DO_NOT_TRACK=1`로 비활성화 가능)로 제한됩니다. 텔레메트리에는 토큰, 모델, 프롬프트, 코드가 절대 포함되지 않습니다. |
 
 ---
 
