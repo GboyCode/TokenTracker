@@ -57,10 +57,10 @@ const DEFAULT_PROVIDER_TIMEOUT_MS = 15_000;
 const ANTIGRAVITY_LIMITS_CACHE_FILE = "usage-limits-cache.json";
 const ANTIGRAVITY_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const ANTIGRAVITY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS = 12 * 60 * 60 * 1000;
-// Public installed-app OAuth client used by Antigravity / agy (same id PokeTokenBar
-// and the agy binary embed). Not confidential — installed-app clients cannot keep a
-// secret. Used to refresh the on-disk Google token so quota can be read like
-// Claude/Codex without the IDE process running.
+// Same client id PokeTokenBar and the agy binary embed. This client requires a
+// client_secret; without it a refresh is rejected as 400 invalid_request, so
+// remote renewal is unavailable. After expiry, quota depends on a local
+// Antigravity/agy process or the user signing in again.
 const ANTIGRAVITY_OAUTH_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
 const ANTIGRAVITY_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const ANTIGRAVITY_LOAD_CODE_ASSIST_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
@@ -3372,9 +3372,12 @@ async function fetchAntigravityRemoteLimits({
   fetchImpl = fetch,
   nowMs = Date.now(),
   signal,
+  creds,
 } = {}) {
-  const creds = loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
-  if (!creds) return null;
+  const resolvedCreds = creds !== undefined
+    ? creds
+    : loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
+  if (!resolvedCreds) return null;
 
   const loadWithToken = async (accessToken) => {
     const payload = await fetchAntigravityQuotaSummaryJson(fetchImpl, accessToken, signal);
@@ -3392,21 +3395,41 @@ async function fetchAntigravityRemoteLimits({
     };
   };
 
-  let accessToken = await resolveAntigravityAccessToken(creds, { fetchImpl, nowMs, signal });
+  let accessToken = await resolveAntigravityAccessToken(resolvedCreds, { fetchImpl, nowMs, signal });
   try {
     return await loadWithToken(accessToken);
   } catch (error) {
-    if (error?.code !== "AUTH_EXPIRED" || !creds.refreshToken) throw error;
-    accessToken = await resolveAntigravityAccessToken(creds, { fetchImpl, nowMs, forceRefresh: true, signal });
+    if (error?.code !== "AUTH_EXPIRED" || !resolvedCreds.refreshToken) throw error;
+    accessToken = await resolveAntigravityAccessToken(resolvedCreds, {
+      fetchImpl,
+      nowMs,
+      forceRefresh: true,
+      signal,
+    });
     return await loadWithToken(accessToken);
   }
 }
 
-function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, remoteError } = {}) {
+function antigravityCredentialsNeedReauth(creds, { nowMs, remoteError } = {}) {
+  if (remoteError?.code === "AUTH_EXPIRED") return true;
+  return Boolean(
+    creds
+    && creds.expiryMs != null
+    && creds.expiryMs <= nowMs + ANTIGRAVITY_TOKEN_REFRESH_SKEW_MS,
+  );
+}
+
+function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, remoteError, creds } = {}) {
   const cached = readAntigravityLimitsCache({ home, nowMs });
-  if (cached) return cached;
-  const creds = loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
-  if (!hasAntigravityInstallEvidence({ home }) && !creds) {
+  const resolvedCreds = creds !== undefined
+    ? creds
+    : loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
+  if (cached) {
+    return antigravityCredentialsNeedReauth(resolvedCreds, { nowMs, remoteError })
+      ? { ...cached, auth_action_required: "reauth" }
+      : cached;
+  }
+  if (!hasAntigravityInstallEvidence({ home }) && !resolvedCreds) {
     return { configured: false };
   }
   if (remoteError) {
@@ -3416,7 +3439,7 @@ function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, r
       : raw;
     return { configured: true, error: message };
   }
-  if (creds) {
+  if (resolvedCreds) {
     return { configured: true, error: ANTIGRAVITY_AUTH_EXPIRED_MESSAGE };
   }
   return { configured: true, error: ANTIGRAVITY_NOT_RUNNING_MESSAGE };
@@ -3445,6 +3468,7 @@ async function fetchAntigravityLimits({
   securityRunner,
   signal,
 } = {}) {
+  const creds = loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
   const startedAtMs = performance.now();
   // min(this step's ceiling, budget left after reserving the fallback guard).
   // 0 means "no time left" — the caller must skip the call, not issue it.
@@ -3485,7 +3509,15 @@ async function fetchAntigravityLimits({
   if (remoteTimeoutMs > 0) {
     try {
       const remote = await withProviderTimeout(
-        fetchAntigravityRemoteLimits({ home, platform, securityRunner, fetchImpl, nowMs, signal }),
+        fetchAntigravityRemoteLimits({
+          home,
+          platform,
+          securityRunner,
+          fetchImpl,
+          nowMs,
+          signal,
+          creds,
+        }),
         "Antigravity",
         remoteTimeoutMs,
       );
@@ -3510,7 +3542,14 @@ async function fetchAntigravityLimits({
       signal,
     });
     if (!processInfo.configured) {
-      return antigravityUnavailableResult({ home, nowMs, platform, securityRunner, remoteError });
+      return antigravityUnavailableResult({
+        home,
+        nowMs,
+        platform,
+        securityRunner,
+        remoteError,
+        creds,
+      });
     }
     if (processInfo.error) {
       return { configured: true, error: processInfo.error };
@@ -3616,6 +3655,7 @@ async function fetchAntigravityLimits({
       platform,
       securityRunner,
       remoteError: remoteError || error,
+      creds,
     });
   }
 }

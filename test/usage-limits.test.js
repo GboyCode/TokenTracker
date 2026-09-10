@@ -3420,7 +3420,6 @@ describe("loadAntigravityCredentials", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
-
 });
 
 describe("Antigravity helpers", () => {
@@ -4144,6 +4143,86 @@ describe("fetchAntigravityLimits remote OAuth", () => {
       assert.equal(result.configured, true);
       assert.equal(result.cached, true);
       assert.equal(result.primary_window.used_percent, 33);
+      assert.equal(result.auth_action_required, undefined);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("flags reauth when expired credentials can only serve the disk cache", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-remote-reauth-"));
+    try {
+      writeAntigravityOauthToken(tmp, { expiry: "2020-01-01T00:00:00Z" });
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(trackerDir, "usage-limits-cache.json"),
+        JSON.stringify({
+          antigravity: {
+            primary_window: { used_percent: 33, reset_at: "2099-01-01T00:00:00.000Z" },
+            cached_at: "2026-08-31T00:00:00.000Z",
+          },
+        }),
+        "utf8",
+      );
+      const result = await fetchAntigravityLimits({
+        platform: "linux",
+        home: tmp,
+        commandRunner() { return { status: 1, stdout: "" }; },
+        async fetchImpl(url) {
+          if (String(url).includes("oauth2.googleapis.com/token")) {
+            return { ok: false, status: 400, async json() { return { error: "invalid_request" }; } };
+          }
+          return { ok: false, status: 503, async json() { return {}; } };
+        },
+        nowMs: Date.parse("2026-08-31T01:00:00.000Z"),
+      });
+      assert.equal(result.configured, true);
+      assert.equal(result.cached, true);
+      assert.equal(result.cached_at, "2026-08-31T00:00:00.000Z");
+      assert.equal(result.primary_window.used_percent, 33);
+      assert.equal(result.auth_action_required, "reauth");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the keychain at most once per fetchAntigravityLimits call", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-security-once-"));
+    try {
+      writeAntigravityOauthToken(tmp, { expiry: "2020-01-01T00:00:00Z" });
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(trackerDir, "usage-limits-cache.json"),
+        JSON.stringify({
+          antigravity: {
+            primary_window: { used_percent: 33, reset_at: "2099-01-01T00:00:00.000Z" },
+            cached_at: "2026-08-31T00:00:00.000Z",
+          },
+        }),
+        "utf8",
+      );
+      let securityCalls = 0;
+      const result = await fetchAntigravityLimits({
+        platform: "darwin",
+        home: tmp,
+        commandRunner() { return { status: 1, stdout: "" }; },
+        securityRunner() {
+          securityCalls += 1;
+          return { status: 1, stdout: "" };
+        },
+        async fetchImpl(url) {
+          if (String(url).includes("oauth2.googleapis.com/token")) {
+            return { ok: false, status: 400, async json() { return { error: "invalid_request" }; } };
+          }
+          return { ok: false, status: 503, async json() { return {}; } };
+        },
+        nowMs: Date.parse("2026-08-31T01:00:00.000Z"),
+      });
+      assert.equal(securityCalls, 1);
+      assert.equal(result.cached, true);
+      assert.equal(result.auth_action_required, "reauth");
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
