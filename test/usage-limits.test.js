@@ -1,5 +1,4 @@
 const assert = require("node:assert/strict");
-const { createHash } = require("node:crypto");
 const { describe, it } = require("node:test");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -4633,12 +4632,14 @@ describe("getUsageLimits Ark timeout fallback", () => {
 describe("getUsageLimits Claude stale fallback", () => {
   const FUTURE_RESET = "2099-01-01T00:00:00.000Z";
 
-  function makeClaudeHome(tmp) {
+  const CLAUDE_TOKEN_EXPIRES_AT_MS = Date.now() + 6 * 60 * 60 * 1000;
+
+  function makeClaudeHome(tmp, { expiresAt = CLAUDE_TOKEN_EXPIRES_AT_MS } = {}) {
     const claudeDir = path.join(tmp, ".claude");
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(
       path.join(claudeDir, ".credentials.json"),
-      JSON.stringify({ claudeAiOauth: { accessToken: "claude-token" } }),
+      JSON.stringify({ claudeAiOauth: { accessToken: "claude-token", expiresAt } }),
     );
   }
 
@@ -4837,7 +4838,7 @@ describe("getUsageLimits Claude stale fallback", () => {
     }
   });
 
-  it("drops a fingerprinted cooldown when the access token rotates", async () => {
+  it("drops a stamped cooldown when the access token rotates", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-rotate-"));
     try {
@@ -4852,12 +4853,17 @@ describe("getUsageLimits Claude stale fallback", () => {
 
       const cooldownPath = path.join(tmp, ".tokentracker", "tracker", "claude-usage-rate-limit.json");
       const cooldown = JSON.parse(fs.readFileSync(cooldownPath, "utf8"));
-      assert.match(cooldown.token_fingerprint, /^[0-9a-f]{16}$/);
+      assert.equal(cooldown.token_expires_at, new Date(CLAUDE_TOKEN_EXPIRES_AT_MS).toISOString());
       assert.equal(JSON.stringify(cooldown).includes("claude-token"), false);
 
       fs.writeFileSync(
         path.join(tmp, ".claude", ".credentials.json"),
-        JSON.stringify({ claudeAiOauth: { accessToken: "claude-token-rotated" } }),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "claude-token-rotated",
+            expiresAt: CLAUDE_TOKEN_EXPIRES_AT_MS + 60 * 60 * 1000,
+          },
+        }),
       );
 
       let claudeCalls = 0;
@@ -4885,7 +4891,7 @@ describe("getUsageLimits Claude stale fallback", () => {
     }
   });
 
-  it("keeps a fingerprinted cooldown while the same token is still armed", async () => {
+  it("keeps a stamped cooldown while the same token is still armed", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-match-"));
     try {
@@ -4896,7 +4902,7 @@ describe("getUsageLimits Claude stale fallback", () => {
         path.join(trackerDir, "claude-usage-rate-limit.json"),
         JSON.stringify({
           retry_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-          token_fingerprint: createHash("sha256").update("claude-token", "utf8").digest("hex").slice(0, 16),
+          token_expires_at: new Date(CLAUDE_TOKEN_EXPIRES_AT_MS).toISOString(),
         }),
       );
 
@@ -4914,7 +4920,7 @@ describe("getUsageLimits Claude stale fallback", () => {
     }
   });
 
-  it("honors a pre-fingerprint cooldown file as still active", async () => {
+  it("honors a cooldown file written before token stamping as still active", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-legacy-"));
     try {
@@ -4929,7 +4935,7 @@ describe("getUsageLimits Claude stale fallback", () => {
       let claudeCalls = 0;
       const limited = await runLimits(tmp, () => {
         claudeCalls += 1;
-        throw new Error("legacy cooldown files without a fingerprint must still block");
+        throw new Error("legacy cooldown files without a token stamp must still block");
       });
 
       assert.equal(claudeCalls, 0);
@@ -4952,7 +4958,7 @@ describe("getUsageLimits Claude stale fallback", () => {
         cooldownPath,
         JSON.stringify({
           retry_at: new Date(Date.now() - 1000).toISOString(),
-          token_fingerprint: createHash("sha256").update("claude-token", "utf8").digest("hex").slice(0, 16),
+          token_expires_at: new Date(CLAUDE_TOKEN_EXPIRES_AT_MS).toISOString(),
         }),
       );
 

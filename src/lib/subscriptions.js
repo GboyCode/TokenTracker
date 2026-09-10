@@ -289,13 +289,13 @@ function parseClaudeOauthExpiryMs(value) {
   return null;
 }
 
-function extractClaudeCodeAccessToken(payload, nowMs = Date.now()) {
+function extractClaudeCodeOauth(payload, nowMs = Date.now()) {
   const oauth = payload?.claudeAiOauth;
-  const token = normalizeString(oauth?.accessToken);
-  if (!token) return null;
+  const accessToken = normalizeString(oauth?.accessToken);
+  if (!accessToken) return null;
   const expiresAtMs = parseClaudeOauthExpiryMs(oauth?.expiresAt);
   if (expiresAtMs != null && expiresAtMs <= nowMs + CLAUDE_TOKEN_EXPIRY_SKEW_MS) return null;
-  return token;
+  return { accessToken, expiresAtMs };
 }
 
 function extractClaudeKeychainSubscription(payload) {
@@ -402,7 +402,11 @@ async function detectOpenclawSessionIntegration({ home, env }) {
   };
 }
 
-function readClaudeCodeAccessToken({
+// Returns the live OAuth token plus its expiry stamp. The expiry doubles as a
+// rotation marker for the 429 cool-down: it changes on every refresh and, unlike
+// the token itself, is not a secret, so nothing derived from a credential has to
+// be written to disk.
+function readClaudeCodeOauthToken({
   platform = process.platform,
   securityRunner,
   home,
@@ -415,8 +419,8 @@ function readClaudeCodeAccessToken({
       try {
         const raw = readMacosKeychainPassword({ service, securityRunner, env });
         if (!raw) continue;
-        const token = extractClaudeCodeAccessToken(JSON.parse(raw), nowMs);
-        if (token) return token;
+        const oauth = extractClaudeCodeOauth(JSON.parse(raw), nowMs);
+        if (oauth) return oauth;
       } catch (_e) {
         continue;
       }
@@ -431,10 +435,14 @@ function readClaudeCodeAccessToken({
   const raw = readClaudeCodeCredentialsFile({ home, fsReader });
   if (!raw) return null;
   try {
-    return extractClaudeCodeAccessToken(JSON.parse(raw), nowMs);
+    return extractClaudeCodeOauth(JSON.parse(raw), nowMs);
   } catch (_e) {
     return null;
   }
+}
+
+function readClaudeCodeAccessToken(options = {}) {
+  return readClaudeCodeOauthToken(options)?.accessToken ?? null;
 }
 
 async function readCodexAccessToken({ home, env } = {}) {
@@ -494,6 +502,7 @@ module.exports = {
   detectClaudeCodeCredentialsPresence,
   detectClaudeCodeSubscriptionDetails,
   readClaudeCodeAccessToken,
+  readClaudeCodeOauthToken,
   readCodexAccessToken,
   readCodexAuthBundle,
 };

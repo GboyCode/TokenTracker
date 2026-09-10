@@ -9,6 +9,7 @@ const {
   detectClaudeCodeCredentialsPresence,
   detectClaudeCodeSubscriptionDetails,
   readClaudeCodeAccessToken,
+  readClaudeCodeOauthToken,
 } = require("../src/lib/subscriptions");
 
 function base64UrlEncodeJson(value) {
@@ -424,6 +425,20 @@ test("readClaudeCodeAccessToken returns null when the keychain token is expired"
   assert.equal(
     readClaudeCodeAccessToken({ platform: "darwin", securityRunner: runner, nowMs }),
     null,
+  );
+});
+
+test("readClaudeCodeOauthToken exposes the expiry that identifies the credential", () => {
+  const nowMs = Date.parse("2026-09-10T00:00:00.000Z");
+  const expiresAt = nowMs + 6 * 60 * 60 * 1000;
+  const runner = () => ({
+    status: 0,
+    stdout: JSON.stringify({ claudeAiOauth: { accessToken: "live-darwin-token", expiresAt } }),
+  });
+
+  assert.deepEqual(
+    readClaudeCodeOauthToken({ platform: "darwin", securityRunner: runner, nowMs }),
+    { accessToken: "live-darwin-token", expiresAtMs: expiresAt },
   );
 });
 

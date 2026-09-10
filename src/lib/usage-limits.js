@@ -11,7 +11,7 @@ const { promisify } = require("node:util");
 const {
   detectClaudeCodeCredentialsPresence,
   detectClaudeCodeSubscriptionDetails,
-  readClaudeCodeAccessToken,
+  readClaudeCodeOauthToken,
   readCodexAccessToken,
   readCodexAuthBundle,
 } = require("./subscriptions");
@@ -117,8 +117,6 @@ const CLAUDE_RATE_LIMIT_FILE = "claude-usage-rate-limit.json";
 const KIRO_CREDITS_SIDECAR_FILE = "kiro-credits.json";
 const CLAUDE_RATE_LIMIT_DEFAULT_COOLDOWN_SEC = 5 * 60;
 const CLAUDE_RATE_LIMIT_MAX_COOLDOWN_SEC = 60 * 60;
-// Prefix only — enough to notice a token rotation, never the secret itself.
-const CLAUDE_RATE_LIMIT_TOKEN_FINGERPRINT_LEN = 16;
 
 function clampPercent(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -2576,48 +2574,44 @@ function resolveClaudeRateLimitPath({ home } = {}) {
   return path.join(home || os.homedir(), ".tokentracker", "tracker", CLAUDE_RATE_LIMIT_FILE);
 }
 
-function claudeRateLimitTokenFingerprint(accessToken) {
-  if (typeof accessToken !== "string" || !accessToken) return null;
-  return crypto
-    .createHash("sha256")
-    .update(accessToken, "utf8")
-    .digest("hex")
-    .slice(0, CLAUDE_RATE_LIMIT_TOKEN_FINGERPRINT_LEN);
+function claudeTokenExpiryStamp(tokenExpiresAtMs) {
+  return Number.isFinite(tokenExpiresAtMs)
+    ? new Date(tokenExpiresAtMs).toISOString()
+    : null;
 }
 
 // Returns the cooldown expiry in ms if a 429 cooldown is still active, else null.
-// A cooldown armed for a previous access token must not outlive that token:
-// after the user refreshes Claude Code login, forceRefresh still cannot punch
-// through this file, so a mismatched fingerprint is treated as no cooldown.
-function readClaudeRateLimitRetryAtMs({ home, nowMs = Date.now(), accessToken } = {}) {
+// A cooldown armed for a previous access token must not outlive that token: after
+// the user refreshes the Claude Code login, forceRefresh still cannot punch through
+// this file, so a cooldown stamped with a different token expiry is discarded.
+// The token's own expiry identifies the credential without persisting anything
+// derived from the secret.
+function readClaudeRateLimitRetryAtMs({ home, nowMs = Date.now(), tokenExpiresAtMs } = {}) {
   const cachePath = resolveClaudeRateLimitPath({ home });
   try {
     const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
     const retryAtMs = parseTimeMs(parsed?.retry_at);
     if (retryAtMs === null || retryAtMs <= nowMs) return null;
-    const storedFingerprint = typeof parsed.token_fingerprint === "string"
-      ? parsed.token_fingerprint
+    const stampedExpiry = typeof parsed.token_expires_at === "string"
+      ? parsed.token_expires_at
       : null;
-    if (storedFingerprint) {
-      const currentFingerprint = claudeRateLimitTokenFingerprint(accessToken);
-      if (!currentFingerprint || currentFingerprint !== storedFingerprint) {
-        clearClaudeRateLimitCooldown({ home });
-        return null;
-      }
+    if (stampedExpiry && stampedExpiry !== claudeTokenExpiryStamp(tokenExpiresAtMs)) {
+      clearClaudeRateLimitCooldown({ home });
+      return null;
     }
     return retryAtMs;
   } catch (_error) {}
   return null;
 }
 
-function writeClaudeRateLimitCooldown(retryAfterSec, { home, nowMs = Date.now(), accessToken } = {}) {
+function writeClaudeRateLimitCooldown(retryAfterSec, { home, nowMs = Date.now(), tokenExpiresAtMs } = {}) {
   const sec = Number.isFinite(retryAfterSec) && retryAfterSec > 0
     ? Math.min(retryAfterSec, CLAUDE_RATE_LIMIT_MAX_COOLDOWN_SEC)
     : CLAUDE_RATE_LIMIT_DEFAULT_COOLDOWN_SEC;
   const cachePath = resolveClaudeRateLimitPath({ home });
   const payload = { retry_at: new Date(nowMs + sec * 1000).toISOString() };
-  const fingerprint = claudeRateLimitTokenFingerprint(accessToken);
-  if (fingerprint) payload.token_fingerprint = fingerprint;
+  const expiryStamp = claudeTokenExpiryStamp(tokenExpiresAtMs);
+  if (expiryStamp) payload.token_expires_at = expiryStamp;
   try {
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
     const tmpPath = `${cachePath}.${process.pid}.tmp`;
@@ -3758,11 +3752,13 @@ async function fetchUsageLimitsUncached({
 } = {}) {
   const nowMs = Date.now();
 
-  const [claudeToken, claudeSubscription, codexAuth] = await Promise.all([
-    Promise.resolve().then(() => readClaudeCodeAccessToken({ platform, securityRunner, home })),
+  const [claudeOauth, claudeSubscription, codexAuth] = await Promise.all([
+    Promise.resolve().then(() => readClaudeCodeOauthToken({ platform, securityRunner, home, nowMs })),
     Promise.resolve().then(() => detectClaudeCodeSubscriptionDetails({ platform, securityRunner, home })),
     readCodexAuthBundle({ home, env }),
   ]);
+  const claudeToken = claudeOauth?.accessToken || null;
+  const claudeTokenExpiresAtMs = claudeOauth?.expiresAtMs ?? null;
   const claudePlanType = claudeSubscription?.planType || null;
 
   // Match the official Codex CLI: prefer the access token's JWT expiry and refresh only
@@ -3802,7 +3798,7 @@ async function fetchUsageLimitsUncached({
   // Skip the upstream Claude call entirely while a 429 cooldown is active — calling again
   // just renews the penalty. The result handling below serves cache or a cooldown message.
   const claudeRetryAtMs = claudeToken
-    ? readClaudeRateLimitRetryAtMs({ home, nowMs, accessToken: claudeToken })
+    ? readClaudeRateLimitRetryAtMs({ home, nowMs, tokenExpiresAtMs: claudeTokenExpiresAtMs })
     : null;
   // Also avoid cross-process hammering after a recent successful read: embedded-server
   // restarts and background polls read the disk cache instead of spending another Claude
@@ -3975,14 +3971,21 @@ async function fetchUsageLimitsUncached({
     // surface an accurate "retry in ~Nm" message rather than the misleading hardcoded one.
     const reason = claudeResult?.reason;
     if (reason?.code === "RATE_LIMITED") {
-      writeClaudeRateLimitCooldown(reason.retryAfterSec, { home, nowMs, accessToken: claudeToken });
+      writeClaudeRateLimitCooldown(reason.retryAfterSec, {
+        home,
+        nowMs,
+        tokenExpiresAtMs: claudeTokenExpiresAtMs,
+      });
     }
     const cached = readClaudeLimitsCache({ home, nowMs });
     if (cached) {
       claude = cached;
     } else {
-      const retryAtMs = readClaudeRateLimitRetryAtMs({ home, nowMs, accessToken: claudeToken })
-        || claudeRetryAtMs;
+      const retryAtMs = readClaudeRateLimitRetryAtMs({
+        home,
+        nowMs,
+        tokenExpiresAtMs: claudeTokenExpiresAtMs,
+      }) || claudeRetryAtMs;
       claude = {
         configured: true,
         error: retryAtMs
@@ -4008,7 +4011,7 @@ async function fetchUsageLimitsUncached({
     const claudeCooldownMs = readClaudeRateLimitRetryAtMs({
       home,
       nowMs,
-      accessToken: claudeToken,
+      tokenExpiresAtMs: claudeTokenExpiresAtMs,
     });
     if (claudeCooldownMs) {
       claude.retry_at = new Date(claudeCooldownMs).toISOString();
