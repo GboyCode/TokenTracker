@@ -121,3 +121,14 @@ describe("token unit system persistence", () => {
     expect(storage.store["tt.tokenFormat"]).toBe("full");
   });
 });
+
+it("preserves the legacy preference if writing the unit system fails", () => {
+  const values = { "tt.tokenFormat": "chinese" };
+  Object.defineProperty(window, "localStorage", { configurable: true, value: {
+    getItem: (key) => values[key] ?? null,
+    setItem: (key, value) => { if (key === "tt.tokenUnitSystem") throw new Error("quota"); values[key] = value; },
+  } });
+  expect(migrateLegacyChineseTokenFormat()).toBe(false);
+  expect(readTokenUnitSystem()).toBe("chinese");
+  expect(values["tt.tokenFormat"]).toBe("chinese");
+});

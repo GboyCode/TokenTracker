@@ -78,8 +78,8 @@ export function migrateLegacyChineseTokenFormat() {
     if (window.localStorage?.getItem(TOKEN_FORMAT_STORAGE_KEY) !== TOKEN_UNIT_SYSTEMS.CHINESE) {
       return false;
     }
-    window.localStorage?.setItem(TOKEN_FORMAT_STORAGE_KEY, TOKEN_FORMAT_MODES.COMPACT);
     window.localStorage?.setItem(TOKEN_UNIT_SYSTEM_STORAGE_KEY, TOKEN_UNIT_SYSTEMS.CHINESE);
+    window.localStorage?.setItem(TOKEN_FORMAT_STORAGE_KEY, TOKEN_FORMAT_MODES.COMPACT);
     return true;
   } catch (_error) {
     return false;

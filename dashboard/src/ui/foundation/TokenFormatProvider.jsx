@@ -4,6 +4,7 @@ import { copy } from "../../lib/copy";
 import {
   TOKEN_FORMAT_MODES,
   TOKEN_FORMAT_STORAGE_KEY,
+  TOKEN_UNIT_SYSTEMS,
   TOKEN_UNIT_SYSTEM_STORAGE_KEY,
   formatTokenCount,
   formatTokenTooltip,
@@ -30,6 +31,9 @@ export function TokenFormatProvider({ children }) {
     const onStorage = (event) => {
       if (event.key === TOKEN_FORMAT_STORAGE_KEY) {
         setModeState(normalizeTokenFormatMode(event.newValue));
+        if (event.newValue === TOKEN_UNIT_SYSTEMS.CHINESE) {
+          setUnitSystemState(TOKEN_UNIT_SYSTEMS.CHINESE);
+        }
       }
       if (event.key === TOKEN_UNIT_SYSTEM_STORAGE_KEY) {
         setUnitSystemState(normalizeTokenUnitSystem(event.newValue));
@@ -79,25 +83,26 @@ export function TokenFormatProvider({ children }) {
 export function TokenFormatModeOverride({ children, mode }) {
   const parent = useContext(TokenFormatContext);
   const scopedMode = normalizeTokenFormatMode(mode);
+  const unitSystem = parent?.unitSystem ?? readTokenUnitSystem();
 
   const formatTokens = useCallback(
     (value, options = {}) => {
       if (parent) return parent.formatTokens(value, { ...options, mode: scopedMode });
-      return formatTokenCount(value, { ...options, mode: scopedMode });
+      return formatTokenCount(value, { unitSystem, ...options, mode: scopedMode });
     },
-    [parent, scopedMode],
+    [parent, scopedMode, unitSystem],
   );
   const formatTokensTooltip = useCallback(
     (value, options = {}) => {
       if (parent) return parent.formatTokensTooltip(value, { ...options, mode: scopedMode });
-      return formatTokenTooltip(value, { ...options, mode: scopedMode });
+      return formatTokenTooltip(value, { unitSystem, ...options, mode: scopedMode });
     },
-    [parent, scopedMode],
+    [parent, scopedMode, unitSystem],
   );
   const value = useMemo(
     () => ({
       mode: scopedMode,
-      unitSystem: parent?.unitSystem ?? readTokenUnitSystem(),
+      unitSystem,
       setMode: parent?.setMode ?? (() => {}),
       setUnitSystem: parent?.setUnitSystem ?? (() => {}),
       formatTokens,
@@ -108,7 +113,7 @@ export function TokenFormatModeOverride({ children, mode }) {
       formatTokensTooltip,
       parent?.setMode,
       parent?.setUnitSystem,
-      parent?.unitSystem,
+      unitSystem,
       scopedMode,
     ],
   );

@@ -123,3 +123,16 @@ it("keeps a scoped modal compact while the persisted global mode is full", () =>
   expect(screen.getByTestId("override-tooltip")).toHaveTextContent("12.3M · 12,345,678");
   expect(window.localStorage.getItem(TOKEN_FORMAT_STORAGE_KEY)).toBe("full");
 });
+
+it("honors Chinese units in an override without a parent provider", () => {
+  window.localStorage.setItem(TOKEN_UNIT_SYSTEM_STORAGE_KEY, "chinese");
+  render(<TokenFormatModeOverride mode="compact"><OverrideProbe /></TokenFormatModeOverride>);
+  expect(screen.getByTestId("override-value")).toHaveTextContent("1234.6万");
+  expect(screen.getByTestId("override-tooltip")).toHaveTextContent("1234.6万 · 12,345,678");
+});
+
+it("accepts a legacy Chinese preference from another window", () => {
+  render(<LocaleProvider><TokenFormatProvider><Probe /></TokenFormatProvider></LocaleProvider>);
+  act(() => window.dispatchEvent(new StorageEvent("storage", { key: TOKEN_FORMAT_STORAGE_KEY, newValue: "chinese" })));
+  expect(screen.getByText("1234.6万")).toBeInTheDocument();
+});
