@@ -6,7 +6,7 @@
 
 ### AI に使ったコストを正確に把握 — すべての CLI を横断して
 
-**36 種類の AI コーディングツール**からトークン数を自動収集し、ローカルで集計、美しいダッシュボードで本当のコスト推移を可視化します。クラウドアカウント不要、API キー不要、セットアップ不要 — コマンド 1 つで完了です。
+**37 種類の AI コーディングツール**からトークン数を自動収集し、ローカルで集計、美しいダッシュボードで本当のコスト推移を可視化します。クラウドアカウント不要、API キー不要、セットアップ不要 — コマンド 1 つで完了です。
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -50,8 +50,8 @@ npx tokentracker-cli
 **30 秒で手に入るもの:**
 - 📊 `localhost:7680` のローカルダッシュボードで、使用トレンド、モデル別内訳、コスト分析が見える
 - 🔌 インストール済みの対応 AI ツールすべてに対する hook を自動検出
-- 🏠 100% ローカル — アカウント不要、API キー不要、ネットワーク通信なし（オプションのリーダーボードを除く）
-- 🧩 *オプション:* 250+ の公開 Skill を閲覧して Claude · Codex · Gemini · OpenCode · Hermes 間で同期できる Skills タブ
+- 🏠 ローカルファースト — ログをマシン上で直接解析。アカウントや API キーは不要です
+- 🧩 *オプション:* 250+ の公開 Skill を閲覧して Claude · Codex · AStudio · Gemini · OpenCode · Hermes 間で同期できる Skills タブ
 
 > **ネイティブのデスクトップアプリが欲しい?**
 > - **macOS** — [`TokenTrackerBar.dmg` をダウンロード](https://github.com/xiufengsun/TokenTracker/releases/latest/download/TokenTrackerBar.dmg) → Applications にドラッグ。デスクトップウィジェット、メニューバーのステータスアイコン、WKWebView 上の同じダッシュボードを含みます。
@@ -88,8 +88,8 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ## ✨ 機能
 
-- 🔌 **36 種類の AI ツールを標準対応** — Claude Code、Codex CLI、Cursor、Gemini CLI、Antigravity、Kiro、OpenCode、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、pi、Dots、Prime Agent、Craft Agents、Reasonix、Kilo CLI、Kilo Code、Roo Code、Zed Agent、Goose、Droid、Mimo Code、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio
-- 🏠 **100% ローカル** — トークンデータがマシンから外に出ることはありません。アカウント不要、API キー不要。
+- 🔌 **37 種類の AI ツールを標準対応** — Claude Code、Codex CLI、AStudio、Cursor、Gemini CLI、Antigravity、Kiro、OpenCode、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、pi、Dots、Prime Agent、Craft Agents、Reasonix、Kilo CLI、Kilo Code、Roo Code、Zed Agent、Goose、Droid、Mimo Code、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio
+- 🏠 **ローカルファースト** — すべてマシン上で動作。アカウントや API キーなしでログをローカル解析します。
 - 🚀 **ゼロコンフィグ** — Hook は初回実行で自動インストール。0 からダッシュボードまで 30 秒。
 - 📊 **美しいダッシュボード** — 使用トレンド、モデル別コスト内訳、GitHub スタイルのアクティビティヒートマップ、プロジェクト別の帰属表示
 - 🖥️ **ネイティブデスクトップアプリ** — macOS メニューバー（ウィジェット付き）と Windows システムトレイ。それぞれ組み込みサーバーとネイティブ WebView のダッシュボードを備えます
@@ -98,9 +98,9 @@ brew install xiufengsun/tokentracker/tokentracker
 - 🟢 **サービス状況ページ** — 8 つの公式 provider ステータスページから稼働状況と障害情報を表示
 - 💰 **コストエンジン** — [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 経由で 2,200+ モデルの価格設定（毎日自動更新）に加え、ニッチなツール（Kiro、Cursor Composer、Kimi、CodeBuddy hy3）向けに厳選された上書き設定。24 時間のディスクキャッシュ + 同梱のオフラインスナップショットにより、ネット接続なしでも正確な USD 表示が可能です。ベンダーが公式価格を公開していないモデル（例: Tencent hy3-preview）はトークン数のみ追跡され、ベンダーが料金を公開するまでコストは $0 と表示されます。
 - 🌐 **オプションのリーダーボード** — 世界中の開発者と比較。ドラッグで列を並び替えて、気になるプロバイダーに絞り込めます（オプトイン制、参加にはサインインが必要）
-- 🔄 **デバイス横断アカウントビュー** — クラウド同期をオンにすると、利用しているすべてのマシン（ノート + デスクトップ + サーバー）の使用量を 1 つのビューに統合 — 合計・トレンド・ヒートマップ・モデル内訳をすべてデバイス横断で集計（オプトイン制、サインインが必要。デフォルトのローカルのみの体験は高速かつオフラインのまま）
-- 🧩 **オプションの Skills タブ** — `anthropics/skills`、`ComposioHQ/awesome-claude-skills`、`skills.sh`、そして自分で追加した任意の GitHub リポジトリから 250+ の公開 Skill をブラウズ。Claude / Codex / Gemini / OpenCode / Hermes にターゲット名を付けて同期し、ワンクリックで Undo
-- 🔒 **プライバシー最優先** — トークン数とタイムスタンプのみ。プロンプト、レスポンス、ファイル内容を扱うことは一切ありません。
+- 🔄 **デバイス横断アカウントビュー** — クラウド同期をオンにすると、利用しているすべてのマシン（ノート + デスクトップ + サーバー）の使用量を 1 つのビューに統合 — 合計・トレンド・ヒートマップ・モデル内訳をすべてデバイス横断で集計（オプトイン制、サインインが必要）
+- 🧩 **オプションの Skills タブ** — `anthropics/skills`、`ComposioHQ/awesome-claude-skills`、`skills.sh`、そして自分で追加した任意の GitHub リポジトリから 250+ の公開 Skill をブラウズ。Claude / Codex / AStudio / Gemini / OpenCode / Hermes にターゲット名を付けて同期し、ワンクリックで Undo
+- 🔒 **プライバシー最優先** — ローカルの使用量メトリクス（トークン数、タイムスタンプ、モデル名）のみを記録。プロンプト、生成テキスト、コードがマシン外に出ることはありません。
 
 ---
 
@@ -142,7 +142,7 @@ brew install xiufengsun/tokentracker/tokentracker
 <tr>
 <td colspan="2">
 
-**Skills Manager** — GitHub と `skills.sh` から 250+ の公開 Skill をブラウズし、一度インストールするだけで Claude / Codex / Gemini / OpenCode / Hermes に同期。ターゲットごとのトグル、ワンクリック Undo、ファイルの手動コピー不要。
+**Skills Manager** — GitHub と `skills.sh` から 250+ の公開 Skill をブラウズし、一度インストールするだけで Claude / Codex / AStudio / Gemini / OpenCode / Hermes に同期。ターゲットごとのトグル、ワンクリック Undo、ファイルの手動コピー不要。
 
 <img src="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/skills.png" alt="Skills Manager" />
 
@@ -167,6 +167,7 @@ brew install xiufengsun/tokentracker/tokentracker
 |---|---|---|
 | **Claude Code** | ✅ 自動 | `settings.json` 内の SessionEnd hook |
 | **Codex CLI** | ✅ 自動 | `config.toml` 内の TOML notify hook |
+| **AStudio** | ✅ 自動 | `config.toml` に TOML notify hook を書き込み |
 | **Cursor** | ✅ 自動 | API + SQLite の認証トークン |
 | **Kiro** | ✅ 自動 | SQLite + JSONL のハイブリッド |
 | **Gemini CLI** | ✅ 自動 | SessionEnd hook |
@@ -204,7 +205,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **TRAE Work CN** | ✅ 自動 | **明示的なオプトインが必要です: `TOKENTRACKER_TRAE_CN_USAGE=1` を設定してください。** 使用量の読み取りはローカルに保存されたサインイン認証を TRAE の内部 API に送信するため、有効にするまで何も送信されません。有効化後: ローカル TRAE Work CN のサインイン認証がある場合、実行可能な非バックグラウンド同期中に macOS のサインイン済みアプリから session-token 使用量を読み取ります。内部 API は変更される可能性があります |
 
 > **プラグインや hook を手動でインストールする必要はありますか?** いいえ。`tokentracker`（または `tokentracker init`）が初回実行ですべて処理します:
-> - **Hook ベース**のツール (Claude Code、Codex、Gemini、Every Code、**CodeBuddy**、**WorkBuddy**、**Grok Build**) — ツール自身の設定に SessionEnd hook または TOML notify エントリーを書き込みます。
+> - **Hook ベース**のツール (Claude Code、Codex、AStudio、Gemini、Every Code、**CodeBuddy**、**WorkBuddy**、**Grok Build**) — ツール自身の設定に SessionEnd hook または TOML notify エントリーを書き込みます。
 > - **プラグインベース**のツール (OpenCode、**OpenClaw**) — プラグインは npm パッケージ内に同梱されています。OpenClaw のセッションプラグインは `~/.tokentracker/tracker/openclaw-plugin/openclaw-session-sync/` にあり、OpenClaw 自身の CLI でリンクして有効化したうえで、同期を起動するセッション終了イベントを許可するために `hooks.allowConversationAccess=true` を設定します。ダウンロードもドラッグ＆ドロップも不要です。
 > - **パッシブリーダー** (Cursor、Kiro、Hermes、Kimi Code、Copilot、**Grok Build**、**oh-my-pi**、**pi**、**Craft Agents**、**Reasonix**、**Kilo CLI**、**Kilo Code**、**Roo Code**、**Antigravity**、**Zed Agent**、**Goose**、**Droid**、**Mimo Code**、**ZCode**、**LM Studio**、**Unsloth Studio**、**AnythingLLM Desktop**、**Claude Science**、**DeepSeek Harness**) — これらのツールには何もインストールしません。ツールがすでに出力しているファイル (SQLite DB、JSONL、OTEL エクスポート、session logs) を読むだけです。Copilot App / CLI の使用量は `~/.copilot/session-store.db` からリクエスト単位で読み取ります。`data.db` は旧データ移行時のベースラインとして一度だけ使い、store が正規ソースになった後は監視専用です。Chat 拡張と旧 CLI は引き続き OTEL を使用し、重複するリクエストは TokenTracker が一度だけ集計します。移行前の混在 App/CLI 履歴でモデルを安全に分離できない残量は、推測したリクエストモデルではなく `github-copilot-legacy` の集計値として保持します。
 > - **Grok Build の推定** — 現在のローカルテレメトリは `updates.jsonl` の累積 `totalTokens` を公開していますが、安定したプロンプト/出力/キャッシュの内訳はありません。`signals.json` は `contextTokensUsed` のスナップショットを使ったフォールバックとして残っています。コールごとの利用詳細が利用可能になるまで、TokenTracker は Grok のコストを推定します。
@@ -217,15 +218,21 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ---
 
-## 🆚 なぜ TokenTracker?
+## 🆚 なぜ TokenTracker? <a id="ccusage-alternative"></a>
 
-|                          | **TokenTracker** | ccusage     | Cursor stats |
-|--------------------------|:---:|:---:|:---:|
-| **対応 AI ツール数**     | **36**           | 1 (Claude)  | 1 (Cursor)   |
-| **ローカルファースト、アカウント不要** | ✅            | ✅           | ❌            |
-| **ネイティブデスクトップアプリ** | ✅ macOS + Windows | ❌          | ❌            |
-| **デスクトップウィジェット** | ✅ 4 種類      | ❌           | ❌            |
-| **レート制限トラッキング** | ✅ 14 プロバイダー   | ❌           | Cursor のみ  |
+> **ウィジェットや視覚的ダッシュボードを備えたデスクトップ体験をお探しですか？** TokenTracker は、多数の AI コーディングツールに対するローカルファースト解析と、ネイティブデスクトップアプリ、デスクトップウィジェット、プロバイダー横断の利用制限監視、任意のクラウド同期を組み合わせています。
+
+| 機能 | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
+|---|:---:|:---:|:---:|
+| **対応 AI ツール数** | **37** | マルチエージェント | マルチエージェント |
+| **主なインターフェース** | ネイティブデスクトップアプリ & Web ダッシュボード | ターミナル CLI | ターミナル TUI & CLI |
+| **ローカルファースト解析** | ✅ | ✅ | ✅ |
+| **ネイティブデスクトップアプリ** | ✅ macOS, Windows, Linux | ❌ | ❌ |
+| **デスクトップウィジェット** | ✅ 4 種類 | ❌ | ❌ |
+| **レート制限トラッキング** | ✅ 14 プロバイダー | 限定的（Claude の利用枠） | 複数のプロバイダーに対応 |
+| **ターミナル分析** | 基本的な CLI（`status`, `--json`） | 充実した CLI レポート | リッチな対話型 TUI & CLI |
+| **JSON エクスポート** | ✅ | ✅ | ✅ |
+| **公開リーダーボード** | 任意（オプトイン） | ❌ | 任意（`submit`） |
 
 ---
 
@@ -233,7 +240,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ```mermaid
 flowchart LR
-    A["AI coding tools<br/>Claude Code · Codex · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio"]
+    A["AI coding tools<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio"]
     A -->|hooks trigger| B[Token Tracker]
     B -->|parse logs<br/>30-min UTC buckets| C[(Local SQLite)]
     C --> D[Web Dashboard]
@@ -244,7 +251,7 @@ flowchart LR
 
 1. AI CLI ツールが通常利用中にログを生成
 2. 軽量な hook が変更を検出して同期をトリガー（Cursor は hook ではなく API を使用）
-3. トークン数はローカルで解析 — プロンプトやレスポンスの内容には一切触れない
+3. トークン数をローカルで解析 — プロンプト、生成テキスト、コードを保存・アップロードすることは一切ありません
 4. UTC の 30 分単位バケットに集計
 5. ダッシュボード、メニューバーアプリ、ウィジェットはすべて同じローカルスナップショットから読み取る
 
@@ -254,12 +261,14 @@ flowchart LR
 
 > 📄 **[プライバシーポリシー全文](docs/PRIVACY.md)**（英語）— アプリが行いうるすべてのネットワークリクエスト、その送信内容、そして無効化の方法を網羅しています。
 
-| 保護 | 説明 |
+TokenTracker は使用量データをローカルで処理します。プロンプト、コード、モデルの応答を収集またはアップロードすることはありません。
+
+| 保護項目 | 説明 |
 |---|---|
-| **コンテンツをアップロードしない** | トークン数とタイムスタンプのみ。プロンプト、レスポンス、ファイル内容は扱いません。 |
-| **デフォルトでローカル限定** | すべてのデータはマシン上に留まります。リーダーボードは完全にオプトインです。 |
-| **監査可能** | オープンソース。[`src/lib/rollout.js`](src/lib/rollout.js) を読んでください — 数字とタイムスタンプだけです。 |
-| **匿名利用統計のみ** | 外部送信は匿名の 2 種類だけ：(1) 1 日最大 1 回のハートビート——マシン ID の一方向ハッシュ、アプリバージョン、OS プラットフォーム、実行形態（cli/macos/windows/linux）；(2) 匿名のダッシュボードのページ/機能イベント（PostHog——autocapture とセッション録画は無効、ブラウザの Do-Not-Track を尊重）。トークン数、モデル名、プロンプト、パスは一切含まれません。[`src/lib/telemetry.js`](src/lib/telemetry.js) と [`dashboard/src/lib/analytics.js`](dashboard/src/lib/analytics.js) で監査可能。`TOKENTRACKER_NO_TELEMETRY=1` または `DO_NOT_TRACK=1` で両方を無効化できます。 |
+| **コードやプロンプトの不収集** | TokenTracker はローカルのログファイルを解析してトークン数とタイムスタンプを抽出します。プロンプト、生成テキスト、コード、会話本文を保存またはアップロードすることはありません。 |
+| **デフォルトでローカルファースト** | 使用量の追跡はすべてローカルマシン上で完結します。アカウント、ログイン、API キーは不要です。クラウド同期や公開リーダーボードは完全にオプトインです。 |
+| **監査可能** | オープンソース。[`src/lib/rollout.js`](src/lib/rollout.js) をご確認ください — 抽出されるのは数値、タイムスタンプ、モデル名のみです。 |
+| **明確なネットワーク通信** | [プライバシーポリシー](docs/PRIVACY.md)にすべて記載されています。デフォルトのリクエストは、プロバイダーの残量確認（マシン上の既存の認証情報を使用）、GitHub スター数取得やアップデート確認、価格データの更新（`raw.githubusercontent.com`）、匿名のテレメトリ（毎日のハートビートと PostHog ページビュー。`TOKENTRACKER_NO_TELEMETRY=1` または `DO_NOT_TRACK=1` で無効化可能）に限られます。テレメトリにトークン、モデル、プロンプト、コードが含まれることはありません。 |
 
 ---
 
@@ -275,6 +284,7 @@ flowchart LR
 | `TOKENTRACKER_DISABLE_GIT_ATTRIBUTION` | Git コミットの紐付けを無効化（`1` で無効）。紐付けは各セッションの作業ディレクトリ内で `git log` を実行します。無効にすると TokenTracker はプロジェクトディレクトリに一切入りません（Outcomes は手動記録分のみ表示） | — |
 | `TOKENTRACKER_GIT_ATTRIBUTION_PROTECTED_DIRS` | Git 紐付けが macOS の保護された場所に入ることを許可（`1` で許可）。既定では `~/Documents`、`~/Downloads`、`~/Desktop`、`~/Library`、メディアフォルダ、`/Volumes` 配下のセッションをスキップします。macOS は場所ごとに個別のアクセス許可ダイアログを出すためです。これらの場所にリポジトリを置いており、許可しても構わない場合のみ有効化してください | — |
 | `CODEX_HOME` | Codex CLI ディレクトリの上書き | `~/.codex` |
+| `TOKENTRACKER_ACODE_HOME` | AStudio ディレクトリの上書き | `~/.acode` |
 | `GEMINI_HOME` | Gemini CLI ディレクトリの上書き | `~/.gemini` |
 
 ---

@@ -65,7 +65,9 @@ for (const slug of [
 ]) {
   test(`${slug}: Astra prices match local standard estimates`, () => {
     const source = fs.readFileSync(path.join(__dirname, "../dashboard/edge-patches", `${slug}.ts`), "utf8");
-    const block = source.match(/const MODEL_PRICING[\s\S]*?\nfunction getModelPricing\(model: string\) \{[\s\S]*?\n\}/)[0];
+    const blockMatch = source.match(/const MODEL_PRICING[\s\S]*?\nfunction getModelPricing\(model: string(?:, source = "")?\) \{[\s\S]*?\n\}/);
+    assert.ok(blockMatch, `${slug}: pricing block is present`);
+    const block = blockMatch[0];
     const rowPricing = source.match(/\nfunction getRowPricing\([\s\S]*?\n\}/)[0];
     const compute = source.match(/\nfunction computeRowCost\([\s\S]*?\n\}/)?.[0] || "";
     const script = transformSync(`${block}\n${rowPricing}\n${compute}`, { loader: "ts", format: "cjs" }).code;
