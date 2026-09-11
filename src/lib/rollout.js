@@ -19816,6 +19816,7 @@ async function parseTraeCnApiIncremental({
 // reconciled through per-session contribution ledgers.
 const DSH_SESSION_LOG_MAX_BYTES = 64 * 1024 * 1024;
 const DSH_SESSION_TEXT_MAX_BYTES = 128 * 1024 * 1024;
+const DSH_LEGACY_TOMBSTONE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DSH_SOURCE = "dsh";
 
 // Precedence mirrors the harness's own resolveDshHome: an explicit
@@ -20768,6 +20769,8 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     let snapshot;
     let parsed;
     let fullParsed = null;
+    let fileReset = false;
+    let sessionChanged = false;
 
     try {
       snapshot = await readDshSessionSnapshot(filePath, {
@@ -20787,17 +20790,25 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
         continue;
       }
 
-      const lastSeq = Number.isFinite(prev?.lastSeq) ? prev.lastSeq : -1;
+      fileReset = Boolean(
+        prev &&
+        (
+          snapshot.inode !== prev.inode ||
+          snapshot.size < prev.size ||
+          (snapshot.size <= prev.size && snapshot.mtimeMs !== prev.mtimeMs)
+        ),
+      );
+      const lastSeq = fileReset || !Number.isFinite(prev?.lastSeq) ? -1 : prev.lastSeq;
       parsed = extractDshSessionUsage(snapshot.text, lastSeq);
-      const sessionChanged = Boolean(
+      sessionChanged = Boolean(
         prev &&
         parsed.sessionId &&
         parsed.sessionId !== previousSessionId,
       );
       if (sessionChanged) parsed = extractDshSessionUsage(snapshot.text, -1);
-      if (!prev || needsLedgerBackfill || sessionChanged) {
+      if (!prev || needsLedgerBackfill || sessionChanged || fileReset) {
         fullParsed = extractDshSessionUsage(snapshot.text, -1);
-        if (!prev || sessionChanged) parsed = fullParsed;
+        if (!prev || sessionChanged || fileReset) parsed = fullParsed;
       }
       if (!parsed.complete) snapshot.mtimeMs = -1;
     } catch (error) {
@@ -20830,6 +20841,8 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     const stalePath = staleFileForSession(sessionId, filePath);
     const previousPath =
       session?.lastPath && session.lastPath !== filePath ? session.lastPath : stalePath;
+    const resetCurrentFile = Boolean(fileReset && !sessionChanged);
+    const replacementPath = previousPath || (resetCurrentFile ? filePath : null);
     const sessionContributions = storedDshContributions(session);
     const staleContributions = storedDshContributions(stalePath && fileState[stalePath]);
     const fileContributions = storedDshContributions(prev);
@@ -20868,12 +20881,13 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     const replaceSession = Boolean(
       sessionId &&
       oldContributions &&
-      (!prev || (previousPath && previousPath !== filePath)),
+      (!prev || resetCurrentFile || (previousPath && previousPath !== filePath)),
     );
     const oldContributionCount = Object.keys(oldContributions || {}).length;
-    if (sessionId && previousPath && !oldContributions) {
-      deferredFilePaths.add(previousPath);
-      deferredMigrationPaths.set(previousPath, "legacy-baseline-unavailable");
+    if (sessionId && replacementPath && !oldContributions) {
+      deferredFilePaths.add(replacementPath);
+      deferredMigrationPaths.set(replacementPath, "legacy-baseline-unavailable");
+      if (resetCurrentFile) fileState[filePath] = { ...prev, mtimeMs: -1 };
       reportProgress(idx, recordsProcessed, eventsAggregated, total);
       continue;
     }
@@ -20883,11 +20897,12 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     ) {
       // A readable header-only or torn replacement is not authoritative. Keep
       // the old contribution until a complete replacement with usage arrives.
-      deferredFilePaths.add(previousPath);
+      deferredFilePaths.add(replacementPath);
       deferredMigrationPaths.set(
-        previousPath,
+        replacementPath,
         parsed.complete ? "replacement-has-no-usage" : "replacement-incomplete",
       );
+      if (resetCurrentFile) fileState[filePath] = { ...prev, mtimeMs: -1 };
       reportProgress(idx, recordsProcessed, eventsAggregated, total);
       continue;
     }
@@ -20900,8 +20915,9 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
       // A complete-looking replacement that drops a previously counted bucket
       // is still unsafe. Format migration should preserve prior usage; defer
       // until a candidate with a verifiable superset arrives.
-      deferredFilePaths.add(previousPath);
-      deferredMigrationPaths.set(previousPath, "replacement-drops-prior-usage");
+      deferredFilePaths.add(replacementPath);
+      deferredMigrationPaths.set(replacementPath, "replacement-drops-prior-usage");
+      if (resetCurrentFile) fileState[filePath] = { ...prev, mtimeMs: -1 };
       reportProgress(idx, recordsProcessed, eventsAggregated, total);
       continue;
     }
@@ -20909,8 +20925,9 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
       // Never let subtractTotals clamp away another session's history when the
       // persisted ledger and hourly bucket disagree. Defer for a repairable,
       // visible retry instead.
-      deferredFilePaths.add(previousPath);
-      deferredMigrationPaths.set(previousPath, "stored-contribution-not-in-bucket");
+      deferredFilePaths.add(replacementPath);
+      deferredMigrationPaths.set(replacementPath, "stored-contribution-not-in-bucket");
+      if (resetCurrentFile) fileState[filePath] = { ...prev, mtimeMs: -1 };
       reportProgress(idx, recordsProcessed, eventsAggregated, total);
       continue;
     }
@@ -20964,16 +20981,29 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     reportProgress(idx, recordsProcessed, eventsAggregated, total);
   }
 
+  const nowMs = Date.now();
   for (const filePath of Object.keys(fileState)) {
     if (presentFiles.has(filePath) || deferredFilePaths.has(filePath)) continue;
     const state = fileState[filePath];
     const legacySessionId = typeof state?.sessionId === "string" ? state.sessionId : null;
-    // Retain pre-ledger file identity as a compact migration tombstone. The
-    // old parser had no session ledger, so pruning this state during a
+    // Retain pre-ledger file identity as a bounded migration tombstone. The
+    // old parser had no session ledger, so pruning this state during a short
     // discovery gap would make a later replacement indistinguishable from a
     // brand-new session. Current ledgers are retained in sessionState instead;
-    // only legacy states need this compatibility hold.
-    if (legacySessionId && !storedDshContributions(state) && !sessionState[legacySessionId]) continue;
+    // only legacy states need this compatibility hold. Expire tombstones after
+    // one week so permanently deleted sessions cannot grow cursor state forever.
+    if (legacySessionId && !storedDshContributions(state) && !sessionState[legacySessionId]) {
+      const missingSince = Number(state?.missingSince);
+      if (
+        !Number.isFinite(missingSince) ||
+        nowMs - missingSince <= DSH_LEGACY_TOMBSTONE_MAX_AGE_MS
+      ) {
+        if (!Number.isFinite(missingSince)) {
+          fileState[filePath] = { ...state, missingSince: nowMs };
+        }
+        continue;
+      }
+    }
     delete fileState[filePath];
   }
 
