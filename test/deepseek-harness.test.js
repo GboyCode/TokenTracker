@@ -499,6 +499,129 @@ test("parseDshIncremental reconciles legacy/v3 and plain/zstd artifact migration
   }
 });
 
+test("parseDshIncremental preserves archived sessions during another artifact migration", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-archived-migration-"));
+  const root = path.join(dir, ".dsh", "sessions", "--proj--");
+  const activeDir = path.join(root, "sess-active");
+  const archivedDir = path.join(root, "sess-archived");
+  fs.mkdirSync(activeDir, { recursive: true });
+  fs.mkdirSync(archivedDir, { recursive: true });
+  const activePath = await writeSessionLog(activeDir, "session.jsonl", [
+    headerLine("sess-active"),
+    requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 100, outputTokens: 20 }),
+  ]);
+  const archivedPath = await writeSessionLog(archivedDir, "session.jsonl", [
+    headerLine("sess-archived"),
+    requestHeaderLine(0, "deepseek-v4-flash"),
+    assistantLine(
+      1,
+      { inputTokens: 30, outputTokens: 10 },
+      { model: "deepseek-v4-flash", time: T0 + 40 * 60 * 1000 },
+    ),
+  ]);
+  const activeV3Path = path.join(activeDir, "session.v3.jsonl");
+  const queuePath = path.join(dir, "queue.jsonl");
+  const cursors = {};
+
+  try {
+    await parseDshIncremental({
+      sessionFiles: [activePath, archivedPath],
+      cursors,
+      queuePath,
+    });
+    fs.unlinkSync(archivedPath);
+    await parseDshIncremental({ sessionFiles: [activePath], cursors, queuePath });
+
+    fs.renameSync(activePath, activeV3Path);
+    fs.utimesSync(activeV3Path, new Date(T0 + 1000), new Date(T0 + 1000));
+    const result = await parseDshIncremental({
+      sessionFiles: [activeV3Path],
+      cursors,
+      queuePath,
+    });
+    assert.equal(result.eventsAggregated, 1);
+
+    const rows = fs.readFileSync(queuePath, "utf8").trim().split("\n").map(JSON.parse);
+    const latestActive = rows.filter(
+      (row) => row.model === "deepseek-v4-pro" && row.hour_start === "2026-05-01T12:00:00.000Z",
+    ).at(-1);
+    const latestArchived = rows.filter(
+      (row) => row.model === "deepseek-v4-flash" && row.hour_start === "2026-05-01T12:30:00.000Z",
+    ).at(-1);
+    assert.equal(latestActive.total_tokens, 120);
+    assert.equal(latestActive.conversation_count, 1);
+    assert.equal(latestArchived.total_tokens, 40, "deleted session history must survive another migration");
+    assert.equal(latestArchived.conversation_count, 1);
+    assert.ok(cursors.dsh.sessions["sess-archived"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseDshIncremental isolates an unreadable migration from healthy sessions", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-isolated-migration-"));
+  const root = path.join(dir, ".dsh", "sessions", "--proj--");
+  const activeDir = path.join(root, "sess-active");
+  const brokenDir = path.join(root, "sess-broken");
+  fs.mkdirSync(activeDir, { recursive: true });
+  fs.mkdirSync(brokenDir, { recursive: true });
+  const activePath = await writeSessionLog(activeDir, "session.jsonl", [
+    headerLine("sess-active"),
+    requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 100, outputTokens: 20 }),
+  ]);
+  const brokenLines = [
+    headerLine("sess-broken"),
+    requestHeaderLine(0, "deepseek-v4-flash"),
+    assistantLine(
+      1,
+      { inputTokens: 30, outputTokens: 10 },
+      { model: "deepseek-v4-flash", time: T0 + 40 * 60 * 1000 },
+    ),
+  ];
+  const brokenPath = await writeSessionLog(brokenDir, "session.jsonl", brokenLines);
+  const activeV3Path = path.join(activeDir, "session.v3.jsonl");
+  const brokenV3Path = path.join(brokenDir, "session.v3.jsonl.zstd");
+  const queuePath = path.join(dir, "queue.jsonl");
+  const cursors = {};
+
+  try {
+    await parseDshIncremental({
+      sessionFiles: [activePath, brokenPath],
+      cursors,
+      queuePath,
+    });
+    fs.renameSync(activePath, activeV3Path);
+    fs.utimesSync(activeV3Path, new Date(T0 + 1000), new Date(T0 + 1000));
+    fs.writeFileSync(brokenV3Path, "not-a-zstd-frame");
+
+    const first = await parseDshIncremental({
+      sessionFiles: [activeV3Path, brokenV3Path],
+      cursors,
+      queuePath,
+    });
+    assert.equal(first.eventsAggregated, 1, "healthy migrations should proceed independently");
+    let rows = fs.readFileSync(queuePath, "utf8").trim().split("\n").map(JSON.parse);
+    let brokenLatest = rows.filter((row) => row.model === "deepseek-v4-flash").at(-1);
+    assert.equal(brokenLatest.total_tokens, 40);
+    assert.ok(cursors.dsh.files[brokenPath], "failed migration cursor should remain retryable");
+
+    await writeSessionLog(brokenDir, "session.v3.jsonl.zstd", brokenLines, { zstd: true });
+    const second = await parseDshIncremental({
+      sessionFiles: [activeV3Path, brokenV3Path],
+      cursors,
+      queuePath,
+    });
+    assert.equal(second.eventsAggregated, 1);
+    rows = fs.readFileSync(queuePath, "utf8").trim().split("\n").map(JSON.parse);
+    brokenLatest = rows.filter((row) => row.model === "deepseek-v4-flash").at(-1);
+    assert.equal(brokenLatest.total_tokens, 40, "retry must not double-count the recovered session");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("parseDshIncremental accepts a replacement session whose seq restarts", async () => {
   const { dir, logPath } = await makeTree({
     compression: "none",

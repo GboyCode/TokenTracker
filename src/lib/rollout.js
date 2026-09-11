@@ -20112,19 +20112,70 @@ function dshSessionDirectoryKey(filePath) {
   return typeof filePath === "string" ? path.dirname(path.resolve(filePath)) : null;
 }
 
-function resetDshBucketsForRebuild(hourlyState, touchedBuckets) {
-  for (const [key, bucket] of Object.entries(hourlyState?.buckets || {})) {
-    if (!bucket?.totals || parseBucketKey(key).source !== DSH_SOURCE) continue;
-    bucket.totals = initTotals();
-    bucket.queuedKey = null;
-    bucket.retractedUnknownKey = null;
-    touchedBuckets.add(key);
+function normalizeDshContributions(value) {
+  const normalized = {};
+  if (!value || typeof value !== "object") return normalized;
+  for (const [key, entry] of Object.entries(value)) {
+    if (!entry || typeof entry !== "object" || !entry.totals) continue;
+    const model = normalizeModelInput(entry.model);
+    const bucketStart = typeof entry.bucketStart === "string" ? entry.bucketStart : null;
+    if (!model || !bucketStart) continue;
+    normalized[key] = {
+      model,
+      bucketStart,
+      totals: cloneTotals(entry.totals),
+    };
   }
+  return normalized;
+}
 
-  for (const key of Object.keys(hourlyState?.groupQueued || {})) {
-    if (normalizeSourceInput(key.split(BUCKET_SEPARATOR)[0]) === DSH_SOURCE) {
-      delete hourlyState.groupQueued[key];
-    }
+function storedDshContributions(state) {
+  if (
+    !state ||
+    typeof state !== "object" ||
+    !Object.prototype.hasOwnProperty.call(state, "contributions")
+  ) {
+    return null;
+  }
+  return normalizeDshContributions(state.contributions);
+}
+
+function addDshContribution(contributions, model, bucketStart, totals) {
+  const key = bucketKey(DSH_SOURCE, model, bucketStart);
+  let contribution = contributions[key];
+  if (!contribution) {
+    contribution = {
+      model,
+      bucketStart,
+      totals: initTotals(),
+    };
+    contributions[key] = contribution;
+  }
+  addTotals(contribution.totals, totals);
+}
+
+function dshContributionsFromDeltas(deltas) {
+  const contributions = {};
+  for (const delta of deltas || []) {
+    const bucketStart = toUtcHalfHourStart(delta.timeMs);
+    if (!bucketStart || !delta.model || !delta.totals) continue;
+    addDshContribution(contributions, delta.model, bucketStart, delta.totals);
+  }
+  return contributions;
+}
+
+function applyDshContributions({ hourlyState, touchedBuckets, contributions, subtract = false }) {
+  for (const contribution of Object.values(contributions || {})) {
+    if (!contribution?.model || !contribution.bucketStart || !contribution.totals) continue;
+    const bucket = getHourlyBucket(
+      hourlyState,
+      DSH_SOURCE,
+      contribution.model,
+      contribution.bucketStart,
+    );
+    if (subtract) subtractTotals(bucket.totals, contribution.totals);
+    else addTotals(bucket.totals, contribution.totals);
+    touchedBuckets.add(bucketKey(DSH_SOURCE, contribution.model, contribution.bucketStart));
   }
 }
 
@@ -20415,7 +20466,8 @@ function extractDshSessionUsage(text, lastSeq = -1) {
 // Incremental parser entrypoint. Mirrors the other passive JSONL readers:
 // identity-check each file (inode/size/mtime), re-read + re-parse only when it
 // changed, dedup via the per-file seq watermark, accumulate into hourly
-// buckets, then flush touched buckets to the queue.
+// buckets, then flush touched buckets to the queue. Session contribution ledgers
+// make artifact-path migrations replace one session instead of resetting DSH.
 async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgress }) {
   await ensureDir(path.dirname(queuePath));
   if (!cursors || typeof cursors !== "object") cursors = {};
@@ -20423,6 +20475,8 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
   const dshState = cursors.dsh;
   let fileState =
     dshState.files && typeof dshState.files === "object" ? dshState.files : {};
+  const sessionState =
+    dshState.sessions && typeof dshState.sessions === "object" ? dshState.sessions : {};
 
   const hourlyState = normalizeHourlyState(cursors?.hourly);
   const touchedBuckets = new Set();
@@ -20433,105 +20487,173 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     : [];
   const presentFiles = new Set(files);
   const total = files.length;
+  const deferredFilePaths = new Set();
   let recordsProcessed = 0;
   let eventsAggregated = 0;
-  let preloadedFiles = null;
-  let migrationPreflightFailed = false;
 
-  // The resolver selects one artifact per session directory, so a missing
-  // cursor path alongside a new path in the same directory means the Harness
-  // switched `session.jsonl` ↔ `session.v3.jsonl` or plain ↔ zstd. Sequence
-  // numbers are not safe to transfer across that migration: v2→v3 rewrites
-  // them. Verify the stable session id from both artifacts, then rebuild every
-  // selected DSH file from zero before replacing the source aggregate.
-  const currentSessionDirs = new Set(files.map(dshSessionDirectoryKey).filter(Boolean));
-  const migrationCandidates = Object.keys(fileState).filter(
-    (filePath) =>
-      !presentFiles.has(filePath) &&
-      currentSessionDirs.has(dshSessionDirectoryKey(filePath)),
-  );
-  if (migrationCandidates.length > 0) {
-    const rebuiltFiles = new Map();
-    let allReadable = true;
-    try {
-      for (const filePath of files) {
-        const snapshot = await readDshSessionSnapshot(filePath);
-        if (!snapshot || snapshot.unchanged) {
-          allReadable = false;
-          break;
-        }
-        rebuiltFiles.set(filePath, {
-          snapshot,
-          parsed: extractDshSessionUsage(snapshot.text, -1),
-        });
-      }
-    } catch (error) {
-      allReadable = false;
-      if (process.env.TOKENTRACKER_DEBUG) {
-        process.stderr.write(`[dsh] artifact migration deferred: ${error?.message || error}\n`);
+  const staleFileForSession = (sessionId, currentPath) => {
+    if (!sessionId) return null;
+    for (const [filePath, state] of Object.entries(fileState)) {
+      if (
+        filePath !== currentPath &&
+        !presentFiles.has(filePath) &&
+        (state?.sessionId === sessionId ||
+          (!state?.sessionId &&
+            dshSessionDirectoryKey(filePath) === dshSessionDirectoryKey(currentPath)))
+      ) {
+        return filePath;
       }
     }
-
-    if (!allReadable) migrationPreflightFailed = true;
-    if (allReadable) {
-      const rebuiltByDirectory = new Map();
-      for (const [filePath, value] of rebuiltFiles) {
-        rebuiltByDirectory.set(dshSessionDirectoryKey(filePath), value.parsed.sessionId);
-      }
-      const verifiedMigration = migrationCandidates.some((oldPath) => {
-        const previousSessionId = fileState[oldPath]?.sessionId;
-        const currentSessionId = rebuiltByDirectory.get(dshSessionDirectoryKey(oldPath));
-        return Boolean(
-          previousSessionId &&
-          currentSessionId &&
-          previousSessionId === currentSessionId,
-        );
-      });
-      if (verifiedMigration) {
-        resetDshBucketsForRebuild(hourlyState, touchedBuckets);
-        fileState = {};
-        preloadedFiles = rebuiltFiles;
-      }
-    }
-  }
-  if (migrationPreflightFailed) {
-    // Never parse a replacement artifact against the old aggregate: if any
-    // selected file could not be verified, retry the migration on the next sync.
-    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
-  }
+    return null;
+  };
 
   for (let idx = 0; idx < files.length; idx++) {
     const filePath = files[idx];
     const prev = fileState[filePath] || null;
+    const previousSessionId = typeof prev?.sessionId === "string" ? prev.sessionId : null;
+    const previousSession = previousSessionId ? sessionState[previousSessionId] : null;
+    const previousFileContributions = storedDshContributions(prev);
+    const previousSessionContributions = storedDshContributions(previousSession);
+    const needsLedgerBackfill = Boolean(
+      previousSessionId && !previousSessionContributions && !previousFileContributions,
+    );
     let snapshot;
     let parsed;
-    try {
-      const preloaded = preloadedFiles?.get(filePath) || null;
-      if (preloaded) {
-        ({ snapshot, parsed } = preloaded);
-      } else {
-        snapshot = await readDshSessionSnapshot(filePath, { previous: prev });
-        if (!snapshot || snapshot.unchanged) {
-          if (cb) {
-            cb({ index: idx + 1, total, recordsProcessed, eventsAggregated, bucketsQueued: touchedBuckets.size });
-          }
-          continue;
-        }
+    let fullParsed = null;
 
-        const lastSeq = Number.isFinite(prev?.lastSeq) ? prev.lastSeq : -1;
-        parsed = extractDshSessionUsage(snapshot.text, lastSeq);
-        if (prev && parsed.sessionId && parsed.sessionId !== prev.sessionId) {
-          parsed = extractDshSessionUsage(snapshot.text, -1);
+    try {
+      snapshot = await readDshSessionSnapshot(filePath, {
+        previous: needsLedgerBackfill ? null : prev,
+      });
+      if (!snapshot || (snapshot.unchanged && !needsLedgerBackfill)) {
+        if (cb) {
+          cb({
+            index: idx + 1,
+            total,
+            recordsProcessed,
+            eventsAggregated,
+            bucketsQueued: touchedBuckets.size,
+          });
         }
+        continue;
+      }
+
+      const lastSeq = Number.isFinite(prev?.lastSeq) ? prev.lastSeq : -1;
+      parsed = extractDshSessionUsage(snapshot.text, lastSeq);
+      const sessionChanged = Boolean(
+        prev &&
+        parsed.sessionId &&
+        parsed.sessionId !== previousSessionId,
+      );
+      if (sessionChanged) parsed = extractDshSessionUsage(snapshot.text, -1);
+      if (!prev || needsLedgerBackfill || sessionChanged) {
+        fullParsed = extractDshSessionUsage(snapshot.text, -1);
+        if (!prev || sessionChanged) parsed = fullParsed;
       }
     } catch (error) {
       if (process.env.TOKENTRACKER_DEBUG) {
         process.stderr.write(`[dsh] skipped ${filePath}: ${error?.message || error}\n`);
       }
+      // A replacement artifact may have an old path that is no longer in the
+      // selected file list. Keep that cursor until the replacement is readable
+      // so a failed migration cannot turn into an untracked double-count.
+      for (const oldPath of Object.keys(fileState)) {
+        if (
+          !presentFiles.has(oldPath) &&
+          dshSessionDirectoryKey(oldPath) === dshSessionDirectoryKey(filePath)
+        ) {
+          deferredFilePaths.add(oldPath);
+        }
+      }
       if (cb) {
-        cb({ index: idx + 1, total, recordsProcessed, eventsAggregated, bucketsQueued: touchedBuckets.size });
+        cb({
+          index: idx + 1,
+          total,
+          recordsProcessed,
+          eventsAggregated,
+          bucketsQueued: touchedBuckets.size,
+        });
       }
       continue;
+    }
+
+    const sessionId = typeof parsed.sessionId === "string" ? parsed.sessionId : null;
+    const stalePathWithoutId = sessionId
+      ? null
+      : Object.keys(fileState).find(
+          (oldPath) =>
+            !presentFiles.has(oldPath) &&
+            dshSessionDirectoryKey(oldPath) === dshSessionDirectoryKey(filePath),
+        );
+    if (stalePathWithoutId) {
+      deferredFilePaths.add(stalePathWithoutId);
+      if (cb) {
+        cb({
+          index: idx + 1,
+          total,
+          recordsProcessed,
+          eventsAggregated,
+          bucketsQueued: touchedBuckets.size,
+        });
+      }
+      continue;
+    }
+    const session = sessionId ? sessionState[sessionId] : null;
+    const stalePath = staleFileForSession(sessionId, filePath);
+    const previousPath =
+      session?.lastPath && session.lastPath !== filePath ? session.lastPath : stalePath;
+    const sessionContributions = storedDshContributions(session);
+    const staleContributions = storedDshContributions(stalePath && fileState[stalePath]);
+    const fileContributions = storedDshContributions(prev);
+    let oldContributions = sessionContributions || staleContributions || fileContributions;
+    const replaceSession = Boolean(
+      sessionId &&
+      oldContributions &&
+      (!prev || (previousPath && previousPath !== filePath)),
+    );
+
+    // Cursors written before the contribution ledger existed can still be
+    // reconciled when the old artifact remains available (coexistence). If it
+    // was renamed away, there is no exact per-session baseline to subtract;
+    // defer rather than risk duplicating the replacement into a shared bucket.
+    if (sessionId && previousPath && !oldContributions) {
+      const oldSnapshot = await readDshSessionSnapshot(previousPath).catch(() => null);
+      if (oldSnapshot?.text != null) {
+        const oldParsed = extractDshSessionUsage(oldSnapshot.text, -1);
+        if (oldParsed.sessionId === sessionId) {
+          oldContributions = dshContributionsFromDeltas(oldParsed.deltas);
+        }
+      }
+    }
+    if (sessionId && previousPath && !oldContributions) {
+      deferredFilePaths.add(previousPath);
+      if (cb) {
+        cb({
+          index: idx + 1,
+          total,
+          recordsProcessed,
+          eventsAggregated,
+          bucketsQueued: touchedBuckets.size,
+        });
+      }
+      continue;
+    }
+
+    if (replaceSession) {
+      applyDshContributions({
+        hourlyState,
+        touchedBuckets,
+        contributions: oldContributions,
+        subtract: true,
+      });
+      if (previousPath && !presentFiles.has(previousPath)) delete fileState[previousPath];
+    }
+
+    let nextContributions = replaceSession
+      ? {}
+      : sessionContributions || fileContributions || {};
+    if (fullParsed) {
+      nextContributions = dshContributionsFromDeltas(fullParsed.deltas);
     }
 
     for (const delta of parsed.deltas) {
@@ -20540,33 +20662,51 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
       const bucket = getHourlyBucket(hourlyState, DSH_SOURCE, delta.model, bucketStart);
       addTotals(bucket.totals, delta.totals);
       touchedBuckets.add(bucketKey(DSH_SOURCE, delta.model, bucketStart));
+      if (!fullParsed) addDshContribution(nextContributions, delta.model, bucketStart, delta.totals);
       eventsAggregated += 1;
     }
 
+    const updatedAt = new Date().toISOString();
     fileState[filePath] = {
       inode: snapshot.inode,
       size: snapshot.size,
       mtimeMs: snapshot.mtimeMs,
-      sessionId: parsed.sessionId || null,
+      sessionId,
       lastSeq: parsed.maxSeq,
-      updatedAt: new Date().toISOString(),
+      contributions: nextContributions,
+      updatedAt,
     };
+    if (sessionId) {
+      sessionState[sessionId] = {
+        lastPath: filePath,
+        contributions: nextContributions,
+        updatedAt,
+      };
+    }
     recordsProcessed += 1;
 
     if (cb) {
-      cb({ index: idx + 1, total, recordsProcessed, eventsAggregated, bucketsQueued: touchedBuckets.size });
+      cb({
+        index: idx + 1,
+        total,
+        recordsProcessed,
+        eventsAggregated,
+        bucketsQueued: touchedBuckets.size,
+      });
     }
   }
 
   for (const filePath of Object.keys(fileState)) {
-    if (!presentFiles.has(filePath)) delete fileState[filePath];
+    if (!presentFiles.has(filePath) && !deferredFilePaths.has(filePath)) delete fileState[filePath];
   }
 
   const bucketsQueued = await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets });
-  hourlyState.updatedAt = new Date().toISOString();
+  const updatedAt = new Date().toISOString();
+  hourlyState.updatedAt = updatedAt;
   cursors.hourly = hourlyState;
   dshState.files = fileState;
-  dshState.updatedAt = new Date().toISOString();
+  dshState.sessions = sessionState;
+  dshState.updatedAt = updatedAt;
 
   return { recordsProcessed, eventsAggregated, bucketsQueued };
 }
