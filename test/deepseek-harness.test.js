@@ -434,10 +434,13 @@ test("parseDshIncremental reconciles legacy/v3 and plain/zstd artifact migration
 
   try {
     await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+    // Simulate the cursor written by the original PR before contribution
+    // ledgers were added.
+    delete cursors.dsh.sessions;
+    delete cursors.dsh.files[logPath].contributions;
 
     const v3Path = path.join(sessionDir, "session.v3.jsonl");
     fs.renameSync(logPath, v3Path);
-    fs.utimesSync(v3Path, new Date(T0 + 1000), new Date(T0 + 1000));
     const selectedV3 = await resolveDshSessionFiles({
       TOKENTRACKER_DSH_HOME: path.join(dir, ".dsh"),
     });

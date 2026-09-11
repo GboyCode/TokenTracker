@@ -20606,16 +20606,28 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     const staleContributions = storedDshContributions(stalePath && fileState[stalePath]);
     const fileContributions = storedDshContributions(prev);
     let oldContributions = sessionContributions || staleContributions || fileContributions;
-    const replaceSession = Boolean(
+
+    // A pure rename preserves the same physical bytes and metadata, so an old
+    // cursor can safely adopt the new path without relying on rewritten seqs.
+    const previousState = previousPath ? fileState[previousPath] : null;
+    if (
       sessionId &&
-      oldContributions &&
-      (!prev || (previousPath && previousPath !== filePath)),
-    );
+      previousPath &&
+      !oldContributions &&
+      !prev &&
+      previousState &&
+      previousState.inode === snapshot.inode &&
+      previousState.size === snapshot.size &&
+      previousState.mtimeMs === snapshot.mtimeMs
+    ) {
+      oldContributions = dshContributionsFromDeltas(parsed.deltas);
+    }
 
     // Cursors written before the contribution ledger existed can still be
     // reconciled when the old artifact remains available (coexistence). If it
-    // was renamed away, there is no exact per-session baseline to subtract;
-    // defer rather than risk duplicating the replacement into a shared bucket.
+    // was rewritten and renamed away, there is no exact per-session baseline
+    // to subtract; defer rather than risk duplicating the replacement into a
+    // shared bucket.
     if (sessionId && previousPath && !oldContributions) {
       const oldSnapshot = await readDshSessionSnapshot(previousPath).catch(() => null);
       if (oldSnapshot?.text != null) {
@@ -20625,6 +20637,11 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
         }
       }
     }
+    const replaceSession = Boolean(
+      sessionId &&
+      oldContributions &&
+      (!prev || (previousPath && previousPath !== filePath)),
+    );
     if (sessionId && previousPath && !oldContributions) {
       deferredFilePaths.add(previousPath);
       if (cb) {
