@@ -19810,9 +19810,10 @@ async function parseTraeCnApiIncremental({
 // built-in zlib zstd first, `@mongodb-js/zstd` as the Node 20 fallback —
 // enforcing a cumulative plaintext bound as we go.
 // Dedup is a per-file `lastSeq` watermark — seq
-// is monotonic within a session log, so an append-only grow re-reads the file
-// and skips everything at or below the watermark; a torn-tail repair or full
-// rewrite re-reads the same seqs and is therefore idempotent.
+// is monotonic within an append-only session log, so a grow re-reads the file
+// and skips everything at or below the watermark. Torn tails never advance the
+// watermark until their JSON record is complete; format replacements are
+// reconciled through per-session contribution ledgers.
 const DSH_SESSION_LOG_MAX_BYTES = 64 * 1024 * 1024;
 const DSH_SESSION_TEXT_MAX_BYTES = 128 * 1024 * 1024;
 const DSH_SOURCE = "dsh";
@@ -20133,11 +20134,20 @@ function storedDshContributions(state) {
   if (
     !state ||
     typeof state !== "object" ||
-    !Object.prototype.hasOwnProperty.call(state, "contributions")
+    !Object.prototype.hasOwnProperty.call(state, "contributions") ||
+    !state.contributions ||
+    typeof state.contributions !== "object"
   ) {
     return null;
   }
-  return normalizeDshContributions(state.contributions);
+  const normalized = normalizeDshContributions(state.contributions);
+  // A partially written or hand-edited ledger is not a safe subtraction
+  // baseline. Treat it as absent so migration defers instead of silently
+  // retracting only some of a session's contribution.
+  if (Object.keys(normalized).length !== Object.keys(state.contributions).length) {
+    return null;
+  }
+  return normalized;
 }
 
 function addDshContribution(contributions, model, bucketStart, totals) {
@@ -20162,6 +20172,81 @@ function dshContributionsFromDeltas(deltas) {
     addDshContribution(contributions, delta.model, bucketStart, delta.totals);
   }
   return contributions;
+}
+
+function legacyDshContributionsFromSnapshot(snapshot, previousState) {
+  if (
+    !snapshot?.text ||
+    !previousState ||
+    typeof previousState !== "object" ||
+    !Number.isSafeInteger(previousState.lastSeq) ||
+    previousState.lastSeq < -1 ||
+    previousState.inode !== snapshot.inode ||
+    !Number.isFinite(previousState.size) ||
+    snapshot.size < previousState.size
+  ) {
+    return null;
+  }
+  const parsed = extractDshSessionUsage(snapshot.text, -1);
+  if (!parsed.complete || parsed.sessionId !== previousState.sessionId) return null;
+  // The pre-ledger parser replayed unknown-sequence usage on every pass, so
+  // there is no safe prefix boundary for such a record. Defer instead.
+  if (parsed.deltas.some((delta) => !Number.isSafeInteger(delta.seq))) return null;
+  return dshContributionsFromDeltas(
+    parsed.deltas.filter((delta) => delta.seq <= previousState.lastSeq),
+  );
+}
+
+function dshContributionsCoverPrior(prior, candidate) {
+  for (const [key, previous] of Object.entries(prior || {})) {
+    const current = candidate?.[key];
+    if (!current?.totals || !previous?.totals) return false;
+    for (const field of [
+      "input_tokens",
+      "cached_input_tokens",
+      "cache_creation_input_tokens",
+      "output_tokens",
+      "reasoning_output_tokens",
+      "total_tokens",
+      "billable_total_tokens",
+      "total_cost_usd",
+      "conversation_count",
+    ]) {
+      const available = Number(current.totals[field] || 0);
+      const required = Number(previous.totals[field] || 0);
+      if (!Number.isFinite(available) || !Number.isFinite(required) || available < required) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function dshContributionsFitHourlyState(hourlyState, contributions) {
+  for (const contribution of Object.values(contributions || {})) {
+    if (!contribution?.model || !contribution.bucketStart || !contribution.totals) continue;
+    const key = bucketKey(DSH_SOURCE, contribution.model, contribution.bucketStart);
+    const bucket = hourlyState?.buckets?.[key];
+    if (!bucket?.totals) return false;
+    for (const field of [
+      "input_tokens",
+      "cached_input_tokens",
+      "cache_creation_input_tokens",
+      "output_tokens",
+      "reasoning_output_tokens",
+      "total_tokens",
+      "billable_total_tokens",
+      "total_cost_usd",
+      "conversation_count",
+    ]) {
+      const available = Number(bucket.totals[field] || 0);
+      const required = Number(contribution.totals[field] || 0);
+      if (!Number.isFinite(available) || !Number.isFinite(required) || available < required) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 function applyDshContributions({ hourlyState, touchedBuckets, contributions, subtract = false }) {
@@ -20392,20 +20477,139 @@ function parseDshUsageSlice(raw) {
   };
 }
 
+function isCompleteDshJsonLine(raw) {
+  const text = String(raw || "").trim();
+  if (!text || text[0] !== "{") return false;
+  let index = 0;
+  const maxDepth = 256;
+  const hex = (char) => /[0-9a-f]/i.test(char || "");
+  const skipWhitespace = () => {
+    while (index < text.length && /\s/.test(text[index])) index += 1;
+  };
+  const parseString = () => {
+    if (text[index] !== '"') return false;
+    index += 1;
+    while (index < text.length) {
+      const char = text[index++];
+      if (char === '"') return true;
+      if (char.charCodeAt(0) < 0x20) return false;
+      if (char !== "\\") continue;
+      if (index >= text.length) return false;
+      const escaped = text[index++];
+      if (escaped === "u") {
+        if (index + 4 > text.length || ![...text.slice(index, index + 4)].every(hex)) return false;
+        index += 4;
+      } else if (!'"\\/bfnrt'.includes(escaped)) {
+        return false;
+      }
+    }
+    return false;
+  };
+  const parseNumber = () => {
+    const start = index;
+    if (text[index] === "-") index += 1;
+    if (text[index] === "0") {
+      index += 1;
+    } else if (/[1-9]/.test(text[index] || "")) {
+      while (/[0-9]/.test(text[index] || "")) index += 1;
+    } else {
+      return false;
+    }
+    if (text[index] === ".") {
+      index += 1;
+      const fractionStart = index;
+      while (/[0-9]/.test(text[index] || "")) index += 1;
+      if (index === fractionStart) return false;
+    }
+    if (text[index] === "e" || text[index] === "E") {
+      index += 1;
+      if (text[index] === "+" || text[index] === "-") index += 1;
+      const exponentStart = index;
+      while (/[0-9]/.test(text[index] || "")) index += 1;
+      if (index === exponentStart) return false;
+    }
+    return index > start;
+  };
+  const parseValue = (depth) => {
+    if (depth > maxDepth) return false;
+    skipWhitespace();
+    const char = text[index];
+    if (char === '"') return parseString();
+    if (char === "{") {
+      index += 1;
+      skipWhitespace();
+      if (text[index] === "}") {
+        index += 1;
+        return true;
+      }
+      while (index < text.length) {
+        skipWhitespace();
+        if (!parseString()) return false;
+        skipWhitespace();
+        if (text[index++] !== ":") return false;
+        if (!parseValue(depth + 1)) return false;
+        skipWhitespace();
+        if (text[index] === "}") {
+          index += 1;
+          return true;
+        }
+        if (text[index++] !== ",") return false;
+      }
+      return false;
+    }
+    if (char === "[") {
+      index += 1;
+      skipWhitespace();
+      if (text[index] === "]") {
+        index += 1;
+        return true;
+      }
+      while (index < text.length) {
+        if (!parseValue(depth + 1)) return false;
+        skipWhitespace();
+        if (text[index] === "]") {
+          index += 1;
+          return true;
+        }
+        if (text[index++] !== ",") return false;
+        skipWhitespace();
+      }
+      return false;
+    }
+    for (const literal of ["true", "false", "null"]) {
+      if (text.startsWith(literal, index)) {
+        index += literal.length;
+        return true;
+      }
+    }
+    return parseNumber();
+  };
+
+  if (!parseValue(0)) return false;
+  skipWhitespace();
+  return index === text.length;
+}
+
 // Parse one session log's plaintext into usage deltas, skipping events whose
 // seq is at or below the watermark. Returns the deltas (each carrying the
-// model and epoch-ms timestamp), the highest seq seen, and the session id.
+// sequence, model and epoch-ms timestamp), the highest complete seq seen, the
+// session id, and whether every non-empty JSONL line was complete.
 function extractDshSessionUsage(text, lastSeq = -1) {
   const deltas = [];
   const watermark = Number.isFinite(lastSeq) ? lastSeq : -1;
   let maxSeq = watermark;
   let sessionId = null;
   let headerModel = null;
+  let complete = true;
 
   const lines = String(text || "").split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line || !line.trim()) continue;
+    if (!isCompleteDshJsonLine(line)) {
+      complete = false;
+      continue;
+    }
     const eventType = parseDshJsonString(findDshJsonProperty(line, "type"));
     if (!eventType) continue;
 
@@ -20457,10 +20661,10 @@ function extractDshSessionUsage(text, lastSeq = -1) {
       parseDshJsonNumber(findDshJsonProperty(data, "timestamp"));
     if (!Number.isFinite(timeMs) || timeMs <= 0) continue;
 
-    deltas.push({ model, timeMs, totals });
+    deltas.push({ seq: seqKnown ? seq : null, model, timeMs, totals });
   }
 
-  return { deltas, maxSeq, sessionId };
+  return { deltas, maxSeq, sessionId, complete };
 }
 
 // Incremental parser entrypoint. Mirrors the other passive JSONL readers:
@@ -20473,13 +20677,29 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
   if (!cursors || typeof cursors !== "object") cursors = {};
   if (!cursors.dsh || typeof cursors.dsh !== "object") cursors.dsh = {};
   const dshState = cursors.dsh;
-  let fileState =
+  const storedFileState =
     dshState.files && typeof dshState.files === "object" ? dshState.files : {};
-  const sessionState =
+  let fileState = { ...storedFileState };
+  const storedSessionState =
     dshState.sessions && typeof dshState.sessions === "object" ? dshState.sessions : {};
+  const sessionState = { ...storedSessionState };
 
   const hourlyState = normalizeHourlyState(cursors?.hourly);
+  // normalizeHourlyState preserves bucket objects for the other incremental
+  // parsers. DSH needs transactional ownership because replacement validation
+  // can defer after inspecting several files and queue append may fail.
+  hourlyState.groupQueued = { ...(hourlyState.groupQueued || {}) };
+  for (const [key, bucket] of Object.entries(hourlyState.buckets || {})) {
+    hourlyState.buckets[key] = {
+      ...(bucket && typeof bucket === "object" ? bucket : {}),
+      totals: {
+        ...initTotals(),
+        ...(bucket?.totals && typeof bucket.totals === "object" ? bucket.totals : {}),
+      },
+    };
+  }
   const touchedBuckets = new Set();
+  const deferredMigrationPaths = new Map();
   const cb = typeof onProgress === "function" ? onProgress : null;
 
   const files = Array.isArray(sessionFiles)
@@ -20507,6 +20727,34 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     return null;
   };
 
+  const deferStaleMigrationPaths = (currentPath, reason) => {
+    let deferred = 0;
+    for (const oldPath of Object.keys(fileState)) {
+      if (
+        !presentFiles.has(oldPath) &&
+        dshSessionDirectoryKey(oldPath) === dshSessionDirectoryKey(currentPath)
+      ) {
+        if (!deferredMigrationPaths.has(oldPath)) deferred += 1;
+        deferredFilePaths.add(oldPath);
+        deferredMigrationPaths.set(oldPath, reason);
+      }
+    }
+    return deferred;
+  };
+
+  const reportProgress = (idx, recordsProcessed, eventsAggregated, total) => {
+    if (cb) {
+      cb({
+        index: idx + 1,
+        total,
+        recordsProcessed,
+        eventsAggregated,
+        bucketsQueued: touchedBuckets.size,
+        deferredMigrations: deferredMigrationPaths.size,
+      });
+    }
+  };
+
   for (let idx = 0; idx < files.length; idx++) {
     const filePath = files[idx];
     const prev = fileState[filePath] || null;
@@ -20525,16 +20773,17 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
       snapshot = await readDshSessionSnapshot(filePath, {
         previous: needsLedgerBackfill ? null : prev,
       });
-      if (!snapshot || (snapshot.unchanged && !needsLedgerBackfill)) {
-        if (cb) {
-          cb({
-            index: idx + 1,
-            total,
-            recordsProcessed,
-            eventsAggregated,
-            bucketsQueued: touchedBuckets.size,
-          });
-        }
+      if (!snapshot) {
+        // A resolver-selected replacement can disappear between discovery and
+        // open. Preserve the old path so a later retry cannot re-add its full
+        // contribution. This is deliberately separate from a thrown read
+        // error because a missing path returns null from the snapshot helper.
+        deferStaleMigrationPaths(filePath, "replacement-missing");
+        reportProgress(idx, recordsProcessed, eventsAggregated, total);
+        continue;
+      }
+      if (snapshot.unchanged && !needsLedgerBackfill) {
+        reportProgress(idx, recordsProcessed, eventsAggregated, total);
         continue;
       }
 
@@ -20550,6 +20799,7 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
         fullParsed = extractDshSessionUsage(snapshot.text, -1);
         if (!prev || sessionChanged) parsed = fullParsed;
       }
+      if (!parsed.complete) snapshot.mtimeMs = -1;
     } catch (error) {
       if (process.env.TOKENTRACKER_DEBUG) {
         process.stderr.write(`[dsh] skipped ${filePath}: ${error?.message || error}\n`);
@@ -20557,23 +20807,8 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
       // A replacement artifact may have an old path that is no longer in the
       // selected file list. Keep that cursor until the replacement is readable
       // so a failed migration cannot turn into an untracked double-count.
-      for (const oldPath of Object.keys(fileState)) {
-        if (
-          !presentFiles.has(oldPath) &&
-          dshSessionDirectoryKey(oldPath) === dshSessionDirectoryKey(filePath)
-        ) {
-          deferredFilePaths.add(oldPath);
-        }
-      }
-      if (cb) {
-        cb({
-          index: idx + 1,
-          total,
-          recordsProcessed,
-          eventsAggregated,
-          bucketsQueued: touchedBuckets.size,
-        });
-      }
+      deferStaleMigrationPaths(filePath, "replacement-read-failed");
+      reportProgress(idx, recordsProcessed, eventsAggregated, total);
       continue;
     }
 
@@ -20587,15 +20822,8 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
         );
     if (stalePathWithoutId) {
       deferredFilePaths.add(stalePathWithoutId);
-      if (cb) {
-        cb({
-          index: idx + 1,
-          total,
-          recordsProcessed,
-          eventsAggregated,
-          bucketsQueued: touchedBuckets.size,
-        });
-      }
+      deferredMigrationPaths.set(stalePathWithoutId, "replacement-session-id-missing");
+      reportProgress(idx, recordsProcessed, eventsAggregated, total);
       continue;
     }
     const session = sessionId ? sessionState[sessionId] : null;
@@ -20615,44 +20843,75 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
       previousPath &&
       !oldContributions &&
       !prev &&
+      parsed.complete &&
       previousState &&
       previousState.inode === snapshot.inode &&
       previousState.size === snapshot.size &&
       previousState.mtimeMs === snapshot.mtimeMs
     ) {
+      // A pure rename preserves the same bytes. Reusing the parsed full
+      // contribution is safe here because replacement below subtracts and
+      // re-adds it; no sequence watermark is transferred.
       oldContributions = dshContributionsFromDeltas(parsed.deltas);
     }
 
     // Cursors written before the contribution ledger existed can still be
-    // reconciled when the old artifact remains available (coexistence). If it
-    // was rewritten and renamed away, there is no exact per-session baseline
-    // to subtract; defer rather than risk duplicating the replacement into a
-    // shared bucket.
+    // reconciled when the old artifact remains available and its same-inode
+    // growth follows the Harness append-only contract. Reconstruct only the
+    // prefix through the old watermark; using the whole current artifact would
+    // subtract events that were appended after the old cursor was written.
     if (sessionId && previousPath && !oldContributions) {
+      const oldState = fileState[previousPath];
       const oldSnapshot = await readDshSessionSnapshot(previousPath).catch(() => null);
-      if (oldSnapshot?.text != null) {
-        const oldParsed = extractDshSessionUsage(oldSnapshot.text, -1);
-        if (oldParsed.sessionId === sessionId) {
-          oldContributions = dshContributionsFromDeltas(oldParsed.deltas);
-        }
-      }
+      oldContributions = legacyDshContributionsFromSnapshot(oldSnapshot, oldState);
     }
     const replaceSession = Boolean(
       sessionId &&
       oldContributions &&
       (!prev || (previousPath && previousPath !== filePath)),
     );
+    const oldContributionCount = Object.keys(oldContributions || {}).length;
     if (sessionId && previousPath && !oldContributions) {
       deferredFilePaths.add(previousPath);
-      if (cb) {
-        cb({
-          index: idx + 1,
-          total,
-          recordsProcessed,
-          eventsAggregated,
-          bucketsQueued: touchedBuckets.size,
-        });
-      }
+      deferredMigrationPaths.set(previousPath, "legacy-baseline-unavailable");
+      reportProgress(idx, recordsProcessed, eventsAggregated, total);
+      continue;
+    }
+    if (
+      replaceSession &&
+      (!parsed.complete || (oldContributionCount > 0 && parsed.deltas.length === 0))
+    ) {
+      // A readable header-only or torn replacement is not authoritative. Keep
+      // the old contribution until a complete replacement with usage arrives.
+      deferredFilePaths.add(previousPath);
+      deferredMigrationPaths.set(
+        previousPath,
+        parsed.complete ? "replacement-has-no-usage" : "replacement-incomplete",
+      );
+      reportProgress(idx, recordsProcessed, eventsAggregated, total);
+      continue;
+    }
+    const candidateContributions = dshContributionsFromDeltas(parsed.deltas);
+    if (
+      replaceSession &&
+      oldContributionCount > 0 &&
+      !dshContributionsCoverPrior(oldContributions, candidateContributions)
+    ) {
+      // A complete-looking replacement that drops a previously counted bucket
+      // is still unsafe. Format migration should preserve prior usage; defer
+      // until a candidate with a verifiable superset arrives.
+      deferredFilePaths.add(previousPath);
+      deferredMigrationPaths.set(previousPath, "replacement-drops-prior-usage");
+      reportProgress(idx, recordsProcessed, eventsAggregated, total);
+      continue;
+    }
+    if (replaceSession && !dshContributionsFitHourlyState(hourlyState, oldContributions)) {
+      // Never let subtractTotals clamp away another session's history when the
+      // persisted ledger and hourly bucket disagree. Defer for a repairable,
+      // visible retry instead.
+      deferredFilePaths.add(previousPath);
+      deferredMigrationPaths.set(previousPath, "stored-contribution-not-in-bucket");
+      reportProgress(idx, recordsProcessed, eventsAggregated, total);
       continue;
     }
 
@@ -20702,19 +20961,20 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     }
     recordsProcessed += 1;
 
-    if (cb) {
-      cb({
-        index: idx + 1,
-        total,
-        recordsProcessed,
-        eventsAggregated,
-        bucketsQueued: touchedBuckets.size,
-      });
-    }
+    reportProgress(idx, recordsProcessed, eventsAggregated, total);
   }
 
   for (const filePath of Object.keys(fileState)) {
-    if (!presentFiles.has(filePath) && !deferredFilePaths.has(filePath)) delete fileState[filePath];
+    if (presentFiles.has(filePath) || deferredFilePaths.has(filePath)) continue;
+    const state = fileState[filePath];
+    const legacySessionId = typeof state?.sessionId === "string" ? state.sessionId : null;
+    // Retain pre-ledger file identity as a compact migration tombstone. The
+    // old parser had no session ledger, so pruning this state during a
+    // discovery gap would make a later replacement indistinguishable from a
+    // brand-new session. Current ledgers are retained in sessionState instead;
+    // only legacy states need this compatibility hold.
+    if (legacySessionId && !storedDshContributions(state) && !sessionState[legacySessionId]) continue;
+    delete fileState[filePath];
   }
 
   const bucketsQueued = await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets });
@@ -20723,9 +20983,24 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
   cursors.hourly = hourlyState;
   dshState.files = fileState;
   dshState.sessions = sessionState;
+  if (deferredMigrationPaths.size > 0) {
+    const reasons = [...new Set(deferredMigrationPaths.values())].sort();
+    dshState.deferredMigrations = {
+      count: deferredMigrationPaths.size,
+      reasons,
+      updatedAt,
+    };
+  } else {
+    delete dshState.deferredMigrations;
+  }
   dshState.updatedAt = updatedAt;
 
-  return { recordsProcessed, eventsAggregated, bucketsQueued };
+  return {
+    recordsProcessed,
+    eventsAggregated,
+    bucketsQueued,
+    deferredMigrations: deferredMigrationPaths.size,
+  };
 }
 
 
