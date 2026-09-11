@@ -19862,13 +19862,20 @@ function resolveDshHomes(env = process.env, deps = {}) {
   return [...new Set([resolved.native, resolved.wsl].filter(Boolean))];
 }
 
+const DSH_SESSION_LOG_PATTERN = /^session(?:\.v\d+)?\.jsonl(?:\.zstd)?$/;
+
 function isDshSessionLogName(name) {
-  return name === "session.jsonl" || name === "session.jsonl.zstd";
+  return typeof name === "string" && DSH_SESSION_LOG_PATTERN.test(name);
+}
+
+function parseDshVersion(name) {
+  const match = typeof name === "string" ? name.match(/\.v(\d+)\.jsonl/) : null;
+  return match ? parseInt(match[1], 10) : 0;
 }
 
 // Walk the harness sessions root for per-session log artifacts. The tree is
-// `<sessions-root>/<project-key>/<session-id>/session.jsonl[.zstd]`; only the
-// exact leaf names are collected so unrelated harness files are ignored.
+// `<sessions-root>/<project-key>/<session-id>/session[.v3].jsonl[.zstd]`; only
+// the matching leaf names are collected so unrelated harness files are ignored.
 async function resolveDshSessionFiles(env = process.env, deps = {}) {
   const out = [];
   const seen = new Set();
@@ -19892,7 +19899,7 @@ async function resolveDshSessionFiles(env = process.env, deps = {}) {
         } else if (transcripts.length > 1) {
           // Harness itself rejects mixed encodings in one root. For a passive
           // reader, choose the actively-written artifact instead of counting the
-          // same session twice; a tie prefers the default zstd encoding.
+          // same session twice; a tie prefers the higher format version, then zstd.
           const ranked = await Promise.all(transcripts.map(async (artifact) => {
             const full = path.join(sessionDir, artifact.name);
             const handle = await fs.open(full, "r").catch(() => null);
@@ -19910,6 +19917,7 @@ async function resolveDshSessionFiles(env = process.env, deps = {}) {
           }));
           ranked.sort((left, right) =>
             right.mtimeMs - left.mtimeMs ||
+            parseDshVersion(right.name) - parseDshVersion(left.name) ||
             Number(right.name.endsWith(".zstd")) - Number(left.name.endsWith(".zstd")),
           );
           selected = ranked[0]?.full || null;
@@ -20330,8 +20338,11 @@ function extractDshSessionUsage(text, lastSeq = -1) {
     const eventType = parseDshJsonString(findDshJsonProperty(line, "type"));
     if (!eventType) continue;
 
-    if (eventType === "session") {
-      const id = parseDshJsonString(findDshJsonProperty(line, "id"));
+    if (eventType === "session" || eventType === "session/start") {
+      const id =
+        parseDshJsonString(findDshJsonProperty(line, "id")) ||
+        parseDshJsonString(findDshJsonProperty(findDshJsonProperty(line, "data"), "id")) ||
+        parseDshJsonString(findDshJsonProperty(findDshJsonProperty(line, "data"), "sessionId"));
       if (id) sessionId = id;
       continue;
     }
@@ -20352,20 +20363,27 @@ function extractDshSessionUsage(text, lastSeq = -1) {
       continue;
     }
 
-    if (eventType !== "assistant/message") continue;
+    if (eventType !== "assistant/message" && eventType !== "message/assistant") continue;
     if (seqKnown && seq <= watermark) continue;
 
     const message = findDshJsonProperty(data, "message");
-    const source = findDshJsonProperty(message, "source");
+    const source = message ? findDshJsonProperty(message, "source") : null;
     const model = normalizeDshModelName(
-      parseDshJsonString(findDshJsonProperty(source, "model")),
+      (source && parseDshJsonString(findDshJsonProperty(source, "model"))) ||
+      parseDshJsonString(findDshJsonProperty(data, "model")),
     ) || headerModel;
     const totals = dshUsageToTotals(
-      parseDshUsageSlice(findDshJsonProperty(data, "usage")),
+      parseDshUsageSlice(
+        findDshJsonProperty(data, "usage") || findDshJsonProperty(line, "usage"),
+      ),
     );
     if (!model || !totals) continue;
 
-    const timeMs = parseDshJsonNumber(findDshJsonProperty(line, "time"));
+    const timeMs =
+      parseDshJsonNumber(findDshJsonProperty(line, "time")) ||
+      parseDshJsonNumber(findDshJsonProperty(line, "timestamp")) ||
+      parseDshJsonNumber(findDshJsonProperty(data, "time")) ||
+      parseDshJsonNumber(findDshJsonProperty(data, "timestamp"));
     if (!Number.isFinite(timeMs) || timeMs <= 0) continue;
 
     deltas.push({ model, timeMs, totals });
@@ -20667,6 +20685,8 @@ module.exports = {
   resolveDshHome,
   resolveDshHomes,
   resolveDshSessionFiles,
+  isDshSessionLogName,
+  parseDshVersion,
   readDshSessionText,
   decodeDshZstd,
   inspectDshZstdFrames,

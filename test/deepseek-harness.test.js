@@ -30,6 +30,8 @@ const {
   resolveDshHome,
   resolveDshHomes,
   resolveDshSessionFiles,
+  isDshSessionLogName,
+  parseDshVersion,
   readDshSessionText,
   normalizeDshModelName,
   dshUsageToTotals,
@@ -500,3 +502,110 @@ test("parseDshIncremental is a no-op with no files", async () => {
   assert.equal(res.bucketsQueued, 0);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("isDshSessionLogName and parseDshVersion accept versioned and legacy session logs", () => {
+  assert.equal(isDshSessionLogName("session.jsonl"), true);
+  assert.equal(isDshSessionLogName("session.jsonl.zstd"), true);
+  assert.equal(isDshSessionLogName("session.v3.jsonl"), true);
+  assert.equal(isDshSessionLogName("session.v3.jsonl.zstd"), true);
+  assert.equal(isDshSessionLogName("session.v2.jsonl"), true);
+  assert.equal(isDshSessionLogName("session.v10.jsonl.zstd"), true);
+
+  assert.equal(isDshSessionLogName("session.log"), false);
+  assert.equal(isDshSessionLogName("session.v3.txt"), false);
+  assert.equal(isDshSessionLogName("v3.jsonl"), false);
+  assert.equal(isDshSessionLogName("sessions.jsonl"), false);
+  assert.equal(isDshSessionLogName(""), false);
+  assert.equal(isDshSessionLogName(null), false);
+
+  assert.equal(parseDshVersion("session.jsonl"), 0);
+  assert.equal(parseDshVersion("session.jsonl.zstd"), 0);
+  assert.equal(parseDshVersion("session.v3.jsonl"), 3);
+  assert.equal(parseDshVersion("session.v3.jsonl.zstd"), 3);
+  assert.equal(parseDshVersion("session.v12.jsonl"), 12);
+});
+
+test("resolveDshSessionFiles discovers v3 session logs and prefers v3 over legacy when tied", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-v3-files-"));
+  const root = path.join(dir, ".dsh", "sessions");
+  fs.mkdirSync(path.join(root, "--p1--", "s1"), { recursive: true });
+  fs.mkdirSync(path.join(root, "--p1--", "s2"), { recursive: true });
+
+  const s1V3 = path.join(root, "--p1--", "s1", "session.v3.jsonl.zstd");
+  fs.writeFileSync(s1V3, "v3 content\n");
+
+  // In s2, both legacy and v3 exist with identical timestamps
+  const s2Legacy = path.join(root, "--p1--", "s2", "session.jsonl");
+  const s2V3 = path.join(root, "--p1--", "s2", "session.v3.jsonl");
+  fs.writeFileSync(s2Legacy, "legacy\n");
+  fs.writeFileSync(s2V3, "v3\n");
+  fs.utimesSync(s2Legacy, new Date(T0), new Date(T0));
+  fs.utimesSync(s2V3, new Date(T0), new Date(T0));
+
+  const files = await resolveDshSessionFiles({ TOKENTRACKER_DSH_HOME: path.join(dir, ".dsh") });
+  assert.deepEqual(files, [
+    s1V3,
+    s2V3,
+  ]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("parseDshIncremental parses DeepSeek Harness v3 session files end-to-end", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-v3-e2e-"));
+  const sessionDir = path.join(dir, "sessions", "--proj--", "sess-v3");
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const logPath = path.join(sessionDir, "session.v3.jsonl");
+
+  const lines = [
+    JSON.stringify({ type: "session/start", version: 3, id: "sess-v3", createdAt: T0, cwd: "/proj" }),
+    JSON.stringify({
+      type: "request/header",
+      seq: 0,
+      time: T0,
+      data: { header: { config: { provider: "deepseek-official", model: "deepseek-v4-pro" } } },
+    }),
+    JSON.stringify({
+      type: "message/assistant",
+      seq: 1,
+      time: T0 + 1000,
+      data: {
+        turn: 1,
+        message: { role: "assistant", source: { model: "deepseek-v4-flash" } },
+        usage: {
+          inputTokens: 100,
+          outputTokens: 40,
+          cacheReadTokens: 50,
+          cacheWriteTokens: 10,
+          reasoningTokens: 20,
+        },
+      },
+    }),
+  ];
+  fs.writeFileSync(logPath, lines.join("\n") + "\n");
+
+  const queuePath = path.join(dir, "queue.jsonl");
+  const cursors = {};
+  const res = await parseDshIncremental({
+    sessionFiles: [logPath],
+    cursors,
+    queuePath,
+  });
+
+  assert.equal(res.recordsProcessed, 1);
+  assert.equal(res.eventsAggregated, 1);
+  assert.equal(res.bucketsQueued, 1);
+
+  const rows = (fs.readFileSync(queuePath, "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].source, "dsh");
+  assert.equal(rows[0].model, "deepseek-v4-flash");
+  assert.equal(rows[0].input_tokens, 100);
+  assert.equal(rows[0].cached_input_tokens, 50);
+  assert.equal(rows[0].cache_creation_input_tokens, 10);
+  assert.equal(rows[0].output_tokens, 40);
+  assert.equal(rows[0].reasoning_output_tokens, 20);
+  assert.equal(rows[0].total_tokens, 220);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
