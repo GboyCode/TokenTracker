@@ -422,6 +422,83 @@ test("parseDshIncremental writes queue rows, dedups on rerun, and adds appended 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("parseDshIncremental reconciles legacy/v3 and plain/zstd artifact migrations", async () => {
+  const lines = [
+    headerLine("sess-migrate"),
+    requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 100, outputTokens: 20 }),
+  ];
+  const { dir, sessionDir, logPath } = await makeTree({ compression: "none", lines });
+  const queuePath = path.join(dir, "queue.jsonl");
+  const cursors = {};
+
+  try {
+    await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+
+    const v3Path = path.join(sessionDir, "session.v3.jsonl");
+    fs.renameSync(logPath, v3Path);
+    fs.utimesSync(v3Path, new Date(T0 + 1000), new Date(T0 + 1000));
+    const selectedV3 = await resolveDshSessionFiles({
+      TOKENTRACKER_DSH_HOME: path.join(dir, ".dsh"),
+    });
+    assert.deepEqual(selectedV3, [v3Path]);
+
+    const v3Result = await parseDshIncremental({
+      sessionFiles: selectedV3,
+      cursors,
+      queuePath,
+    });
+    assert.equal(v3Result.eventsAggregated, 1);
+    let rows = fs.readFileSync(queuePath, "utf8").trim().split("\n").map(JSON.parse);
+    let latest = rows.at(-1);
+    assert.equal(latest.total_tokens, 120, "artifact migration must not double-count the session");
+    assert.equal(latest.conversation_count, 1);
+    assert.equal(cursors.dsh.files[logPath], undefined);
+    assert.ok(cursors.dsh.files[v3Path]);
+
+    const v3ZstdPath = await writeSessionLog(
+      sessionDir,
+      "session.v3.jsonl.zstd",
+      lines,
+      { zstd: true },
+    );
+    fs.utimesSync(v3Path, new Date(T0 + 1000), new Date(T0 + 1000));
+    fs.utimesSync(v3ZstdPath, new Date(T0 + 2000), new Date(T0 + 2000));
+    const selectedZstd = await resolveDshSessionFiles({
+      TOKENTRACKER_DSH_HOME: path.join(dir, ".dsh"),
+    });
+    assert.deepEqual(selectedZstd, [v3ZstdPath]);
+
+    const zstdResult = await parseDshIncremental({
+      sessionFiles: selectedZstd,
+      cursors,
+      queuePath,
+    });
+    assert.equal(zstdResult.eventsAggregated, 1);
+    rows = fs.readFileSync(queuePath, "utf8").trim().split("\n").map(JSON.parse);
+    latest = rows.at(-1);
+    assert.equal(
+      latest.total_tokens,
+      120,
+      "plain/zstd migration must not double-count the session",
+    );
+    assert.equal(latest.conversation_count, 1);
+    assert.equal(cursors.dsh.files[v3Path], undefined);
+    assert.ok(cursors.dsh.files[v3ZstdPath]);
+
+    const noOp = await parseDshIncremental({
+      sessionFiles: selectedZstd,
+      cursors,
+      queuePath,
+    });
+    assert.equal(noOp.eventsAggregated, 0);
+    assert.equal(noOp.bucketsQueued, 0);
+    assert.equal(fs.readFileSync(queuePath, "utf8").trim().split("\n").length, rows.length);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("parseDshIncremental accepts a replacement session whose seq restarts", async () => {
   const { dir, logPath } = await makeTree({
     compression: "none",
