@@ -586,6 +586,28 @@ describe("UsageLimitsPanel", () => {
     expect(within(group).queryByText(/^Stale/i)).not.toBeInTheDocument();
   });
 
+  it("flags Antigravity reauth ahead of the cached badge", () => {
+    render(
+      <UsageLimitsPanel
+        antigravity={{
+          configured: true,
+          error: null,
+          cached: true,
+          cached_at: "2026-07-17T12:00:00.000Z",
+          auth_action_required: "reauth",
+          primary_window: { used_percent: 24, reset_at: "2026-07-24T12:00:00.000Z" },
+        }}
+        order={["antigravity"]}
+      />,
+    );
+
+    const group = screen.getByText("Antigravity").closest("[role='button']");
+    expect(group).not.toBeNull();
+    expect(within(group).getByText(new RegExp(copy("limits.reauth.badge")))).toBeInTheDocument();
+    expect(within(group).getByText(/run `agy`/)).toBeInTheDocument();
+    expect(within(group).queryByText(/cached/i)).not.toBeInTheDocument();
+  });
+
   it("flags an expired Claude sign-in on cached bars instead of the generic stale badge", () => {
     render(
       <UsageLimitsPanel

@@ -9,6 +9,7 @@ const {
   detectClaudeCodeCredentialsPresence,
   detectClaudeCodeSubscriptionDetails,
   readClaudeCodeAccessToken,
+  readClaudeCodeOauthToken,
 } = require("../src/lib/subscriptions");
 
 function base64UrlEncodeJson(value) {
@@ -362,6 +363,7 @@ test("Claude Code credential helpers default to the current platform", async () 
           stdout: JSON.stringify({
             claudeAiOauth: {
               accessToken: "darwin-default-token",
+              expiresAt: Date.now() + 60 * 60 * 1000,
               subscriptionType: "max",
               rateLimitTier: "tier-1",
             },
@@ -384,6 +386,7 @@ test("Claude Code credential helpers default to the current platform", async () 
       await writeJson(path.join(tmp, ".claude", ".credentials.json"), {
         claudeAiOauth: {
           accessToken: "file-default-token",
+          expiresAt: Date.now() + 60 * 60 * 1000,
           subscriptionType: "max",
           rateLimitTier: "tier-1",
         },
@@ -406,6 +409,96 @@ test("Claude Code credential helpers default to the current platform", async () 
     await fs.rm(tmp, { recursive: true, force: true });
   }
 });
+
+test("readClaudeCodeAccessToken returns null when the keychain token is expired", () => {
+  const nowMs = Date.parse("2026-09-10T00:00:00.000Z");
+  const runner = () => ({
+    status: 0,
+    stdout: JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "expired-darwin-token",
+        expiresAt: nowMs - 60_000,
+      },
+    }),
+  });
+
+  assert.equal(
+    readClaudeCodeAccessToken({ platform: "darwin", securityRunner: runner, nowMs }),
+    null,
+  );
+});
+
+test("readClaudeCodeOauthToken exposes the expiry that identifies the credential", () => {
+  const nowMs = Date.parse("2026-09-10T00:00:00.000Z");
+  const expiresAt = nowMs + 6 * 60 * 60 * 1000;
+  const runner = () => ({
+    status: 0,
+    stdout: JSON.stringify({ claudeAiOauth: { accessToken: "live-darwin-token", expiresAt } }),
+  });
+
+  assert.deepEqual(
+    readClaudeCodeOauthToken({ platform: "darwin", securityRunner: runner, nowMs }),
+    { accessToken: "live-darwin-token", expiresAtMs: expiresAt },
+  );
+});
+
+test("readClaudeCodeAccessToken returns a live keychain token", () => {
+  const nowMs = Date.parse("2026-09-10T00:00:00.000Z");
+  const runner = () => ({
+    status: 0,
+    stdout: JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "live-darwin-token",
+        expiresAt: nowMs + 60 * 60 * 1000,
+      },
+    }),
+  });
+
+  assert.equal(
+    readClaudeCodeAccessToken({ platform: "darwin", securityRunner: runner, nowMs }),
+    "live-darwin-token",
+  );
+});
+
+for (const platform of ["linux", "win32"]) {
+  test(`readClaudeCodeAccessToken returns null when the ${platform} credentials file is expired`, async () => {
+    const nowMs = Date.parse("2026-09-10T00:00:00.000Z");
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), `tokentracker-subscriptions-claude-${platform}-expired-`));
+    try {
+      await writeJson(path.join(tmp, ".claude", ".credentials.json"), {
+        claudeAiOauth: {
+          accessToken: `expired-${platform}-token`,
+          expiresAt: nowMs - 60_000,
+        },
+      });
+      assert.equal(
+        readClaudeCodeAccessToken({ platform, home: tmp, nowMs }),
+        null,
+      );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test(`readClaudeCodeAccessToken returns a live ${platform} credentials-file token`, async () => {
+    const nowMs = Date.parse("2026-09-10T00:00:00.000Z");
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), `tokentracker-subscriptions-claude-${platform}-live-`));
+    try {
+      await writeJson(path.join(tmp, ".claude", ".credentials.json"), {
+        claudeAiOauth: {
+          accessToken: `live-${platform}-token`,
+          expiresAt: nowMs + 60 * 60 * 1000,
+        },
+      });
+      assert.equal(
+        readClaudeCodeAccessToken({ platform, home: tmp, nowMs }),
+        `live-${platform}-token`,
+      );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+}
 
 test("collectLocalSubscriptions does not read ~/.claude/.credentials.json on unsupported platforms", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-subscriptions-claude-other-"));
