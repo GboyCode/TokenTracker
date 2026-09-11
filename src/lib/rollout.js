@@ -20790,12 +20790,20 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
         continue;
       }
 
+      const previousHasInode = Number.isFinite(prev?.inode);
+      const previousHasSize = Number.isFinite(prev?.size);
+      const previousHasMtime = Number.isFinite(prev?.mtimeMs);
       fileReset = Boolean(
         prev &&
         (
-          snapshot.inode !== prev.inode ||
-          snapshot.size < prev.size ||
-          (snapshot.size <= prev.size && snapshot.mtimeMs !== prev.mtimeMs)
+          (previousHasInode && snapshot.inode !== prev.inode) ||
+          (previousHasSize && snapshot.size < prev.size) ||
+          (
+            previousHasSize &&
+            previousHasMtime &&
+            snapshot.size <= prev.size &&
+            snapshot.mtimeMs !== prev.mtimeMs
+          )
         ),
       );
       const lastSeq = fileReset || !Number.isFinite(prev?.lastSeq) ? -1 : prev.lastSeq;
