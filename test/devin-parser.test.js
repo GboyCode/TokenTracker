@@ -47,7 +47,6 @@ function quote(value) {
 // Mirrors the verified devin CLI 3000.10.21 schema: sessions.created_at is a
 // Unix-seconds INTEGER, message_nodes.row_id is the INTEGER PRIMARY KEY and
 // node.created_at is Unix seconds (clone persistence time, not call time).
-// `sessions: false` reproduces older databases that lack the sessions table.
 function createDevinDb({ dir, sessions = true } = {}) {
   const root = dir || fs.mkdtempSync(path.join(os.tmpdir(), "devin-test-"));
   const dbPath = path.join(root, "sessions.db");
@@ -201,10 +200,12 @@ test("Devin resolver honors the explicit database override on every platform", (
   );
 });
 
-test("Devin resolver resolves the POSIX data directory", (t) => {
-  // POSIX-only expectations behind an explicit simulated platform so the
-  // assertions stay meaningful when the suite runs on Windows.
-  mockPlatform(t, "linux");
+// POSIX path expectations are host-dependent: node:path keeps win32
+// semantics on Windows even with a mocked platform, so run them on real
+// POSIX hosts only. The all-platform override and mocked win32 WSL
+// contracts above/below stay active on every host.
+const posixTest = process.platform === "win32" ? test.skip : test;
+posixTest("Devin resolver resolves the POSIX data directory", () => {
   assert.equal(
     resolveDevinDbPath({ XDG_DATA_HOME: "/tmp/xdg", HOME: "/home/test" }),
     path.join("/tmp/xdg", "devin", "cli", "sessions.db"),
