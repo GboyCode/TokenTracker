@@ -18,6 +18,7 @@ export const LIMIT_PROVIDER_IDS = [
   "qoderCn",
   "codingPlan",
   "agentPlan",
+  "devin",
 ];
 
 /** Keys for ProviderIcon — mono logos use inline SVG; colored logos use /brand-logos/. */
@@ -46,6 +47,8 @@ export const LIMIT_PROVIDER_ICON_KEYS = {
   codingPlan: "VOLCANO-ARK",
   // Volcano Engine Ark Agent Plan — shares the same Ark brand mark.
   agentPlan: "VOLCANO-ARK",
+  // Devin (devin.ai) — the three-hexagon "nodes" mark under /brand-logos/.
+  devin: "DEVIN",
 };
 
 export function limitProviderIconKey(id) {
@@ -86,6 +89,8 @@ export function limitProviderName(id) {
       return copy("limits.provider.ark_coding_plan");
     case "agentPlan":
       return copy("limits.provider.ark_agent_plan");
+    case "devin":
+      return copy("limits.provider.devin");
     default:
       return String(id || "");
   }

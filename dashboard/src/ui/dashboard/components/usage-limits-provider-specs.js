@@ -230,6 +230,17 @@ export const PROVIDER_LIMIT_SPECS = {
       ];
     },
   },
+  devin: {
+    // Devin subscription quota: fixed daily + weekly windows straight from the
+    // official GetPlanStatus RPC. The server supplies each window's reset time
+    // and length (86400/604800), so pacing uses `limit_window_seconds`.
+    windows(data) {
+      return [
+        { key: "daily", labelKey: "limits.label.devin_daily", window: data.primary_window, windowSecondsField: "limit_window_seconds" },
+        { key: "weekly", labelKey: "limits.label.devin_weekly", window: data.secondary_window, windowSecondsField: "limit_window_seconds" },
+      ];
+    },
+  },
 };
 
 /** Static copy() anchors for validate:copy — labels resolve at runtime via spec.labelKey. */
@@ -287,5 +298,7 @@ export function usageLimitsLabelCopyAnchor() {
     copy("limits.label.ark_agent_plan_5h"),
     copy("limits.label.ark_agent_plan_weekly"),
     copy("limits.label.ark_agent_plan_monthly"),
+    copy("limits.label.devin_daily"),
+    copy("limits.label.devin_weekly"),
   ];
 }
