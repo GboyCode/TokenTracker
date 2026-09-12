@@ -13048,11 +13048,20 @@ async function parseDevinIncremental({
   const rows = await readDevinUsageRows(resolvedDb, sqliteOptions);
   const { events } = buildDevinUsageEvents(rows);
 
-  const hourlyState = normalizeHourlyState(cursors?.hourly);
+  // Deep-clone the normalized working states so reconciliation and enqueue
+  // mutations (bucket totals, queuedKey, groupQueued) never touch `cursors`
+  // before both queue appends below succeed — a failed append must leave the
+  // caller's published state untouched so a retry re-derives the same
+  // contribution and latest-wins rows recover either queue (same convention
+  // as parseTraeCnIncremental). The request/conversation dicts above are
+  // already detached copies whose entries are only ever replaced wholesale.
+  const hourlyState = structuredClone(normalizeHourlyState(cursors?.hourly));
   const touchedBuckets = new Set();
   const projectEnabled =
     typeof projectQueuePath === "string" && projectQueuePath.length > 0;
-  const projectState = projectEnabled ? normalizeProjectState(cursors?.projectHourly) : null;
+  const projectState = projectEnabled
+    ? structuredClone(normalizeProjectState(cursors?.projectHourly))
+    : null;
   const projectTouchedBuckets = projectEnabled ? new Set() : null;
   const projectMetaCache = projectEnabled ? new Map() : null;
   const publicRepoCache = projectEnabled ? new Map() : null;

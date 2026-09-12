@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const cp = require("node:child_process");
@@ -1045,6 +1046,97 @@ sqliteTest("Devin ledger survives cursor serialization for untrusted request ids
     assert.equal(tokenTotal(), 116, "the __proto__ request must not re-add");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+sqliteTest("Devin queue write failure leaves published state untouched so a retry recovers", async () => {
+  for (const target of ["aggregate", "project"]) {
+    const { dir, dbPath } = createDevinDb();
+    const originalAppend = fsp.appendFile;
+    try {
+      const repo = makeGitRepo(path.join(dir, "repo"));
+      insertSession(dbPath, { id: "session", workingDirectory: repo, createdAt: 1783600000 });
+      insertNode(dbPath, {
+        rowId: 1,
+        sessionId: "session",
+        nodeId: 1,
+        chatMessage: devinAssistantMessage({
+          requestId: "request-1",
+          startedAt: "2026-07-09T18:00:00Z",
+          input: 50,
+          output: 5,
+        }),
+        createdAt: 1783600100,
+      });
+      const queuePath = path.join(dir, "queue.jsonl");
+      const projectQueuePath = path.join(dir, "project.queue.jsonl");
+      let cursors = {};
+      const parse = () => parseDevinIncremental({ dbPath, cursors, queuePath, projectQueuePath });
+      const totals = (file, keyPrefix) => {
+        const out = new Map();
+        for (const row of readQueue(file)) {
+          const key = `${row[keyPrefix] || ""}|${row.source}|${row.hour_start}`;
+          out.set(key, row);
+        }
+        return [...out.values()].reduce((sum, row) => sum + (row.total_tokens || 0), 0);
+      };
+
+      await parse();
+      assert.equal(totals(queuePath, "model"), 55, `${target}: baseline aggregate`);
+      assert.equal(totals(projectQueuePath, "project_key"), 55, `${target}: baseline project`);
+
+      insertNode(dbPath, {
+        rowId: 2,
+        sessionId: "session",
+        nodeId: 2,
+        chatMessage: devinAssistantMessage({
+          requestId: "request-2",
+          startedAt: "2026-07-09T18:10:00Z",
+          input: 5,
+          output: 5,
+        }),
+        createdAt: 1783600200,
+      });
+
+      const failedFile = target === "aggregate" ? queuePath : projectQueuePath;
+      fsp.appendFile = async function (file, ...args) {
+        if (file === failedFile) {
+          throw Object.assign(new Error(`Synthetic ${target} write failure`), { code: "EIO" });
+        }
+        return originalAppend.call(this, file, ...args);
+      };
+      await assert.rejects(parse(), { code: "EIO" });
+      fsp.appendFile = originalAppend;
+
+      // Nothing caller-visible may have advanced: the request ledger keeps
+      // only request-1 and the hourly/project buckets keep their published
+      // totals and queuedKey.
+      assert.deepEqual(
+        Object.keys(cursors.devin.requests).sort(),
+        ["request-1"],
+        `${target}: request-2 must not be staged into the published ledger`,
+      );
+      const devinBucket = Object.values(cursors.hourly.buckets).find(
+        (bucket) => bucket?.totals && bucket.totals.total_tokens > 0,
+      );
+      assert.equal(devinBucket.totals.total_tokens, 55, `${target}: published bucket unpolluted`);
+
+      // Cursor JSON round-trip, then the retry must re-derive the same
+      // contribution and let latest-wins rows settle both queues at 65.
+      cursors = JSON.parse(JSON.stringify(cursors));
+      const retried = await parse();
+      assert.equal(retried.eventsAggregated, 1, `${target}: retry recounts the new request`);
+      assert.equal(totals(queuePath, "model"), 65, `${target}: aggregate recovered`);
+      assert.equal(totals(projectQueuePath, "project_key"), 65, `${target}: project recovered`);
+
+      const replay = await parse();
+      assert.equal(replay.eventsAggregated, 0, `${target}: no re-add on replay`);
+      assert.equal(totals(queuePath, "model"), 65);
+      assert.equal(totals(projectQueuePath, "project_key"), 65);
+    } finally {
+      fsp.appendFile = originalAppend;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 
