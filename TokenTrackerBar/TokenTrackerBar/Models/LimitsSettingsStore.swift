@@ -58,6 +58,11 @@ final class LimitsSettingsStore: ObservableObject {
         "devin": "Devin",
     ]
 
+    /// Providers whose visibility switch is also the consent to fetch them.
+    /// They default OFF: only an explicit stored `true` may enable the
+    /// credential-reading quota request.
+    static let optInProviders: Set<String> = ["devin"]
+
     static let iconNames: [String: String] = [
         "claude": "ClaudeLogo",
         "codex": "CodexLogo",
@@ -159,7 +164,12 @@ final class LimitsSettingsStore: ObservableObject {
     }
 
     func isVisible(_ id: String) -> Bool {
-        providerVisibility[id] ?? true
+        providerVisibility[id] ?? Self.defaultVisibility(forProvider: id)
+    }
+
+    /// Devin is opt-in (see `optInProviders`); every other provider defaults on.
+    static func defaultVisibility(forProvider id: String) -> Bool {
+        !optInProviders.contains(id)
     }
 
     /// Providers the user explicitly hid. Hiding is user-authored intent, so it
@@ -347,13 +357,13 @@ final class LimitsSettingsStore: ObservableObject {
 
     private static func normalizeProviderVisibility(_ raw: [String: Any]?) -> [String: Bool] {
         Dictionary(uniqueKeysWithValues: allProviders.map { id in
-            (id, rawBool(raw?[id]) ?? true)
+            (id, rawBool(raw?[id]) ?? defaultVisibility(forProvider: id))
         })
     }
 
     private static func normalizeProviderVisibility(_ raw: [String: Bool]) -> [String: Bool] {
         Dictionary(uniqueKeysWithValues: allProviders.map { id in
-            (id, raw[id] ?? true)
+            (id, raw[id] ?? defaultVisibility(forProvider: id))
         })
     }
 

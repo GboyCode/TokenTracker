@@ -48,7 +48,15 @@ const execFileAsync = promisify(cp.execFile);
 // 2-minute in-memory cache. It also expires early at the earliest upcoming window
 // reset in the cached data (see cacheExpiresAtMs), floored so a provider reporting
 // a reset "right now" can't turn every poll into a full upstream round.
-let cache = { data: null, expiresAtMs: 0 };
+// Partitioned by the Devin opt-in selection so a request made while Devin is
+// off is never served (or joined onto) a response fetched while it was on.
+const cacheByDevinSelection = {
+  off: { data: null, expiresAtMs: 0 },
+  on: { data: null, expiresAtMs: 0 },
+};
+function devinSelectionKey(options) {
+  return options?.devinEnabled === true ? "on" : "off";
+}
 const CACHE_TTL_MS = 2 * 60 * 1000;
 // Must stay below the macOS app's post-reset re-fetch grace (10s in
 // DashboardViewModel.resetBoundaryGrace), or that targeted refresh would be
@@ -3687,7 +3695,7 @@ function withPlanLabel(obj, raw, brand) {
 // hammered). Survives an external resetUsageLimitsCache() (refresh=1 path in
 // local-api.js): a refresh arriving while a fetch is already running reuses that
 // in-flight fetch and returns its result.
-let inFlightFetch = null;
+const inFlightByDevinSelection = { off: null, on: null };
 
 // Codex stamps reset_at as unix seconds; every other provider (and Claude's
 // resets_at) uses ISO strings. Numbers that look like epoch milliseconds are
@@ -3725,17 +3733,19 @@ function cacheExpiresAtMs(data, fetchedAtMs) {
 }
 
 async function getUsageLimits(options = {}) {
+  const selection = devinSelectionKey(options);
+  const cache = cacheByDevinSelection[selection];
   const nowMs = Date.now();
   if (cache.data && nowMs < cache.expiresAtMs) {
     return cache.data;
   }
-  if (inFlightFetch) {
-    return inFlightFetch;
+  if (inFlightByDevinSelection[selection]) {
+    return inFlightByDevinSelection[selection];
   }
   const promise = fetchUsageLimitsUncached(options).finally(() => {
-    if (inFlightFetch === promise) inFlightFetch = null;
+    if (inFlightByDevinSelection[selection] === promise) inFlightByDevinSelection[selection] = null;
   });
-  inFlightFetch = promise;
+  inFlightByDevinSelection[selection] = promise;
   return promise;
 }
 
@@ -3750,6 +3760,7 @@ async function fetchUsageLimitsUncached({
   now = new Date(),
   providerTimeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS,
   forceRefresh = false,
+  devinEnabled = false,
 } = {}) {
   const nowMs = Date.now();
 
@@ -3930,7 +3941,7 @@ async function fetchUsageLimitsUncached({
     // ~/.local/share/devin/credentials.toml. No local fallback — window state
     // lives server-side. fetchDevinLimits throws on auth expiry so the
     // assemble step below can flag auth_action_required.
-    withProviderTimeout(fetchDevinLimits({ home, env, fetchImpl: providerFetch }), "Devin", providerTimeoutMs)
+    withProviderTimeout(fetchDevinLimits({ home, env, enabled: devinEnabled === true, fetchImpl: providerFetch }), "Devin", providerTimeoutMs)
       .then(
         (value) => ({ status: "fulfilled", value }),
         (reason) => ({ status: "rejected", reason }),
@@ -4212,12 +4223,16 @@ async function fetchUsageLimitsUncached({
     };
   }
 
-  cache = { data, expiresAtMs: cacheExpiresAtMs(data, nowMs) };
+  cacheByDevinSelection[devinSelectionKey({ devinEnabled })] = {
+    data,
+    expiresAtMs: cacheExpiresAtMs(data, nowMs),
+  };
   return data;
 }
 
 function resetUsageLimitsCache() {
-  cache = { data: null, expiresAtMs: 0 };
+  cacheByDevinSelection.off = { data: null, expiresAtMs: 0 };
+  cacheByDevinSelection.on = { data: null, expiresAtMs: 0 };
 }
 
 module.exports = {

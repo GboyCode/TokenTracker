@@ -81,7 +81,7 @@ function planStatusBody({
 async function signedInLimits({ fetchImpl, toml = SIGNED_IN_TOML, at } = {}) {
   const { tmp, home, env } = makeDevinHome({ toml, at });
   try {
-    return await fetchDevinLimits({ home, env, fetchImpl });
+    return await fetchDevinLimits({ home, env, fetchImpl, enabled: true });
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -91,6 +91,50 @@ function okFetch(body = planStatusBody()) {
   return async () => jsonResponse(200, body);
 }
 
+describe("opt-in gate", () => {
+  it("returns configured:false by default without reading credentials or fetching", async () => {
+    // A directory where credentials.toml should be makes any read attempt
+    // fail — so a stray credential read would throw instead of passing.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-devin-"));
+    const home = path.join(tmp, "home");
+    fs.mkdirSync(path.join(home, ".local", "share", "devin", "credentials.toml"), {
+      recursive: true,
+    });
+    let calls = 0;
+    try {
+      const result = await fetchDevinLimits({
+        home,
+        env: {},
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse(200, planStatusBody());
+        },
+      });
+      assert.deepEqual(result, { configured: false });
+      assert.equal(calls, 0);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("stays off for a non-true enabled flag", async () => {
+    let calls = 0;
+    for (const enabled of [false, "1", 1, null, undefined]) {
+      const result = await fetchDevinLimits({
+        home: null,
+        env: {},
+        enabled,
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse(200, planStatusBody());
+        },
+      });
+      assert.deepEqual(result, { configured: false }, `enabled=${enabled}`);
+    }
+    assert.equal(calls, 0);
+  });
+});
+
 describe("credential discovery", () => {
   it("uses $XDG_DATA_HOME/devin before the home fallback", async () => {
     const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML, at: "xdg" });
@@ -99,6 +143,7 @@ describe("credential discovery", () => {
       await fetchDevinLimits({
         home,
         env,
+        enabled: true,
         fetchImpl: async (url) => {
           calledUrl = url;
           return jsonResponse(200, planStatusBody());
@@ -126,6 +171,7 @@ describe("credential discovery", () => {
     const result = await fetchDevinLimits({
       home: null,
       env: {},
+      enabled: true,
       fetchImpl: async () => {
         calls += 1;
         return jsonResponse(200, planStatusBody());
@@ -142,6 +188,7 @@ describe("credential discovery", () => {
       const result = await fetchDevinLimits({
         home,
         env,
+        enabled: true,
         fetchImpl: async () => {
           calls += 1;
           return jsonResponse(200, planStatusBody());
@@ -167,6 +214,7 @@ describe("credential discovery", () => {
         fetchDevinLimits({
           home,
           env: {},
+          enabled: true,
           fetchImpl: async () => {
             calls += 1;
             return jsonResponse(200, planStatusBody());
@@ -293,6 +341,18 @@ describe("response normalization", () => {
     assert.equal(result.primary_window.used_percent, 100);
     assert.equal(result.secondary_window.used_percent, 0);
   });
+
+  it("rejects reset timestamps beyond the JS Date range on either window", async () => {
+    // 8640000000001s × 1000 exceeds Date's maximum representable ms.
+    for (const field of ["dailyReset", "weeklyReset"]) {
+      const body = planStatusBody({ [field]: 8_640_000_000_001 });
+      await assert.rejects(
+        signedInLimits({ fetchImpl: okFetch(body) }),
+        /malformed quota reset timestamp/,
+        `expected malformed rejection for ${field}`,
+      );
+    }
+  });
 });
 
 describe("request and transport", () => {
@@ -363,6 +423,7 @@ describe("request and transport", () => {
       const error = await fetchDevinLimits({
         home,
         env: {},
+        enabled: true,
         fetchImpl: async () => {
           throw new Error(
             `upstream refused ${TEST_TOKEN} at ${secretPath} for private@example.invalid`,
@@ -398,6 +459,37 @@ describe("request and transport", () => {
 });
 
 describe("devin inside the aggregated usage-limits round", () => {
+  it("stays configured:false by default and never reads credentials or calls the RPC", async () => {
+    // Credentials path is a directory — any read attempt throws — and the
+    // fetch stub fails the test if GetPlanStatus is ever requested.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-devin-"));
+    const home = path.join(tmp, "home");
+    fs.mkdirSync(path.join(home, ".local", "share", "devin", "credentials.toml"), {
+      recursive: true,
+    });
+    resetUsageLimitsCache();
+    try {
+      const data = await getUsageLimits({
+        home,
+        env: { CLAUDE_CONFIG_DIR: path.join(tmp, "no-claude") },
+        fetchImpl: async (url) => {
+          assert.ok(
+            !String(url).includes("GetPlanStatus"),
+            "Devin RPC called while the provider was off",
+          );
+          return jsonResponse(404, {});
+        },
+      });
+      assert.equal(data.devin.configured, false);
+      assert.equal(data.devin.primary_window, undefined);
+      assert.equal(data.devin.error, undefined);
+      assert.ok("claude" in data && "codex" in data);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("returns data.devin with plan label and both windows", async () => {
     const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
     resetUsageLimitsCache();
@@ -405,6 +497,7 @@ describe("devin inside the aggregated usage-limits round", () => {
       const data = await getUsageLimits({
         home,
         env: { ...env, CLAUDE_CONFIG_DIR: path.join(tmp, "no-claude") },
+        devinEnabled: true,
         fetchImpl: async (url) => {
           if (String(url).includes("GetPlanStatus")) {
             return jsonResponse(
@@ -430,6 +523,80 @@ describe("devin inside the aggregated usage-limits round", () => {
     }
   });
 
+  it("keeps enabled and disabled selections in separate cache slots", async () => {
+    const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
+    resetUsageLimitsCache();
+    let devinFetches = 0;
+    const base = {
+      home,
+      env: { ...env, CLAUDE_CONFIG_DIR: path.join(tmp, "no-claude") },
+      fetchImpl: async (url) => {
+        if (String(url).includes("GetPlanStatus")) {
+          devinFetches += 1;
+          return jsonResponse(200, planStatusBody({ dailyRemaining: 60 }));
+        }
+        return jsonResponse(404, {});
+      },
+    };
+    try {
+      const enabled = await getUsageLimits({ ...base, devinEnabled: true });
+      assert.equal(enabled.devin.configured, true);
+      assert.equal(enabled.devin.primary_window.used_percent, 40);
+      assert.equal(devinFetches, 1);
+
+      // A disabled caller must not be served (or join) the enabled result.
+      const disabled = await getUsageLimits({ ...base, devinEnabled: false });
+      assert.equal(disabled.devin.configured, false);
+      assert.equal(disabled.devin.primary_window, undefined);
+      assert.equal(devinFetches, 1, "disabled caller re-fetched Devin");
+
+      // The enabled variant stays cached for enabled callers.
+      const enabledAgain = await getUsageLimits({ ...base, devinEnabled: true });
+      assert.equal(enabledAgain.devin.configured, true);
+      assert.equal(devinFetches, 1, "enabled cache slot was not reused");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not join a disabled caller onto an in-flight enabled fetch", async () => {
+    const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
+    resetUsageLimitsCache();
+    let resolveDevin;
+    const devinGate = new Promise((resolve) => {
+      resolveDevin = resolve;
+    });
+    const base = {
+      home,
+      env: { ...env, CLAUDE_CONFIG_DIR: path.join(tmp, "no-claude") },
+      fetchImpl: async (url) => {
+        if (String(url).includes("GetPlanStatus")) {
+          await devinGate;
+          return jsonResponse(200, planStatusBody());
+        }
+        return jsonResponse(404, {});
+      },
+    };
+    try {
+      const enabledPromise = getUsageLimits({ ...base, devinEnabled: true });
+      const disabled = await getUsageLimits({ ...base, devinEnabled: false });
+      assert.equal(
+        disabled.devin.configured,
+        false,
+        "disabled caller received the in-flight enabled result",
+      );
+      assert.equal(disabled.devin.primary_window, undefined);
+      resolveDevin();
+      const enabled = await enabledPromise;
+      assert.equal(enabled.devin.configured, true);
+    } finally {
+      resolveDevin();
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("returns configured:false for devin without credentials without breaking peers", async () => {
     const { tmp, home, env } = makeDevinHome();
     resetUsageLimitsCache();
@@ -437,6 +604,7 @@ describe("devin inside the aggregated usage-limits round", () => {
       const data = await getUsageLimits({
         home,
         env: { ...env, CLAUDE_CONFIG_DIR: path.join(tmp, "no-claude") },
+        devinEnabled: true,
         fetchImpl: async () => jsonResponse(404, {}),
       });
       assert.equal(data.devin.configured, false);
@@ -457,6 +625,7 @@ describe("devin inside the aggregated usage-limits round", () => {
       const data = await getUsageLimits({
         home,
         env: { CLAUDE_CONFIG_DIR: path.join(tmp, "no-claude") },
+        devinEnabled: true,
         fetchImpl: async () => jsonResponse(404, {}),
       });
       assert.equal(data.devin.configured, true);
@@ -476,6 +645,7 @@ describe("devin inside the aggregated usage-limits round", () => {
       const data = await getUsageLimits({
         home,
         env: { ...env, CLAUDE_CONFIG_DIR: path.join(tmp, "no-claude") },
+        devinEnabled: true,
         fetchImpl: async (url) => {
           if (String(url).includes("GetPlanStatus")) {
             throw new Error("socket hang up");

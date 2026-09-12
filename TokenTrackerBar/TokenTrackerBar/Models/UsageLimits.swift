@@ -601,6 +601,19 @@ struct DevinLimits: Codable, Equatable {
         case cachedAt = "cached_at"
         case authActionRequired = "auth_action_required"
     }
+
+    /// The shape published while the Devin provider switch is off — no
+    /// previously fetched windows may outlive the user's selection.
+    static let unconfigured = DevinLimits(
+        configured: false,
+        error: nil,
+        planLabel: nil,
+        primaryWindow: nil,
+        secondaryWindow: nil,
+        cachedAt: nil,
+        stale: nil,
+        authActionRequired: nil
+    )
 }
 
 struct AntigravityLimits: Codable, Equatable {
@@ -663,5 +676,32 @@ extension UsageLimitsResponse {
     ) -> UsageLimitsResponse {
         guard let current, !incoming.hasAnyProviderWithoutError else { return incoming }
         return current
+    }
+
+    /// Devin rows must never outlive the user's provider selection. While the
+    /// switch is off, retained/cached payloads are rewritten to the
+    /// not-configured shape so views, widgets and reset detection all agree.
+    func applyingDevinSelection(_ selected: Bool) -> UsageLimitsResponse {
+        guard !selected, let devin, devin != .unconfigured else { return self }
+        return UsageLimitsResponse(
+            fetchedAt: fetchedAt,
+            claude: claude,
+            codex: codex,
+            cursor: cursor,
+            gemini: gemini,
+            kimi: kimi,
+            kiro: kiro,
+            grok: grok,
+            antigravity: antigravity,
+            copilot: copilot,
+            zcode: zcode,
+            opencodeGo: opencodeGo,
+            commandCode: commandCode,
+            qoder: qoder,
+            qoderCn: qoderCn,
+            codingPlan: codingPlan,
+            agentPlan: agentPlan,
+            devin: .unconfigured
+        )
     }
 }

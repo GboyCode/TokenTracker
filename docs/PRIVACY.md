@@ -1,6 +1,6 @@
 # Privacy Policy
 
-_Last updated: 2026-09-09 · Applies to the `tokentracker-cli` npm package, the macOS app, the Windows app, the Linux app, and [www.tokentracker.cc](https://www.tokentracker.cc)._
+_Last updated: 2026-09-12 · Applies to the `tokentracker-cli` npm package, the macOS app, the Windows app, the Linux app, and [www.tokentracker.cc](https://www.tokentracker.cc)._
 
 TokenTracker reads the local logs that AI coding tools already write to your disk, and turns them into token counts and cost estimates. It is local-first: the dashboard, the parsers and the database all run on your machine.
 
@@ -53,7 +53,7 @@ To erase everything TokenTracker knows about you, delete that directory. `tokent
 |---|---|---|---|
 | **Anonymous heartbeat** | `srctyff5.us-east.insforge.app` | A one-way hash of the machine id, plus the app version, OS platform, and app shell (`cli` / `macos` / `windows` / `linux`) as separate plain fields. Nothing else. | At most once per day |
 | **Dashboard analytics** | `us.i.posthog.com` (PostHog) | Pageviews and explicitly instrumented feature events, plus which shell you use. Autocapture and session recording are **off**; browser Do-Not-Track is respected. | While the dashboard is open |
-| **Provider quota reads** | The provider's own API (`api.anthropic.com`, `chatgpt.com`, `cursor.com`, `api.github.com`, `api.kimi.com`, `api.z.ai`, `qoder.com`, `qoder.com.cn`, `openapi.qoder.sh`, `openapi.qoder.com.cn`, `cloudcode-pa.googleapis.com`, `server.codeium.com`, …) | Whatever that provider's own endpoint requires, authenticated with the credentials **that provider already stored on your machine**. These requests go directly from your machine to the provider — they never pass through our servers, and we never see the response. | While quota bars are visible |
+| **Provider quota reads** | The provider's own API (`api.anthropic.com`, `chatgpt.com`, `cursor.com`, `api.github.com`, `api.kimi.com`, `api.z.ai`, `qoder.com`, `qoder.com.cn`, `openapi.qoder.sh`, `openapi.qoder.com.cn`, `cloudcode-pa.googleapis.com`, …) | Whatever that provider's own endpoint requires, authenticated with the credentials **that provider already stored on your machine**. These requests go directly from your machine to the provider — they never pass through our servers, and we never see the response. | While quota bars are visible |
 | **TRAE Work CN usage read** | TRAE's internal API | Transmits the existing sign-in authorization from the locally signed-in TRAE Work CN app to TRAE; reads usage metadata only. TokenTracker never persists or logs the auth token or prompt/response content. | Off unless you set `TOKENTRACKER_TRAE_CN_USAGE=1`; then during eligible non-background sync when local TRAE Work CN auth exists |
 | **GitHub star count** | `api.github.com` | Nothing but the request itself (public repo metadata) | On dashboard load |
 | **Update check** | `api.github.com` | Nothing but the request itself | Windows: once at launch. macOS: only when you click "Check for Updates" |
@@ -73,6 +73,7 @@ Audit: [`src/lib/telemetry.js`](../src/lib/telemetry.js), [`dashboard/src/lib/an
 
 | Request | Destination | What is sent | Trigger |
 |---|---|---|---|
+| **Devin quota read** | `server.codeium.com` (Devin's official `GetPlanStatus` RPC) | An empty JSON body, authenticated with the Devin CLI session token already stored on your machine. The token is never persisted or logged by TokenTracker. | Off by default — only while the Devin provider switch in Settings → Usage & Limits → Providers is on, and only on a locally authenticated request |
 | **Cloud sync / leaderboard** | `srctyff5.us-east.insforge.app` | Hourly buckets only — see §4 | Signing in to a TokenTracker account |
 | **Exchange rates** | `open.er-api.com` | Nothing but the request itself | Selecting a non-USD display currency |
 | **Desktop pet download** | `codex-pets.net` | The pet id you chose | Importing a pet from a link |

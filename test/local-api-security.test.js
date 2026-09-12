@@ -1392,3 +1392,56 @@ test("auth bridge mutation requires the local auth token", async () => {
     restore();
   }
 });
+
+test("usage-limits honors devin=1 only on locally authenticated requests", async () => {
+  const { mod, restore } = loadLocalApiWithSpawn(createSuccessfulSpawn([]));
+  // Stub the aggregate seam so the handler never touches real credentials or
+  // the network; only the forwarded selection flag is observed.
+  const usageLimits = require("../src/lib/usage-limits");
+  const originalGet = usageLimits.getUsageLimits;
+  const originalReset = usageLimits.resetUsageLimitsCache;
+  const forwarded = [];
+  usageLimits.getUsageLimits = async (options) => {
+    forwarded.push(options);
+    return { fetched_at: "2026-01-01T00:00:00Z", devin: { configured: false } };
+  };
+  usageLimits.resetUsageLimitsCache = () => {};
+
+  async function requestLimits({ devin, token } = {}) {
+    const query = devin ? `?devin=${devin}` : "";
+    const headers = token ? { "x-tokentracker-local-auth": token } : {};
+    const req = createRequest({ method: "GET", headers });
+    const res = createResponse();
+    const handled = await handler(
+      req,
+      res,
+      new URL(`http://127.0.0.1/functions/tokentracker-usage-limits${query}`),
+    );
+    assert.equal(handled, true);
+    assert.equal(res.statusCode, 200);
+    return res;
+  }
+
+  const handler = mod.createLocalApiHandler({
+    queuePath: path.join(process.cwd(), "tmp-queue.jsonl"),
+  });
+  try {
+    const localAuthToken = await getLocalAuthToken(handler);
+
+    await requestLimits({ devin: "1" });
+    assert.equal(forwarded.at(-1).devinEnabled, false, "bare devin=1 must not enable");
+
+    await requestLimits({ devin: "1", token: "wrong-token" });
+    assert.equal(forwarded.at(-1).devinEnabled, false, "bad token must not enable");
+
+    await requestLimits({ devin: "1", token: localAuthToken });
+    assert.equal(forwarded.at(-1).devinEnabled, true, "authenticated opt-in forwards enabled");
+
+    await requestLimits({ token: localAuthToken });
+    assert.equal(forwarded.at(-1).devinEnabled, false, "authenticated request without opt-in stays off");
+  } finally {
+    usageLimits.getUsageLimits = originalGet;
+    usageLimits.resetUsageLimitsCache = originalReset;
+    restore();
+  }
+});

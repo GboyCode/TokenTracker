@@ -3220,6 +3220,14 @@ function createLocalApiHandler({ queuePath }) {
         if (forceRefresh) {
           resetUsageLimitsCache();
         }
+        // Devin quota is opt-in (Settings > Usage & Limits > Providers). The
+        // `devin=1` flag is honored only on locally authenticated requests —
+        // a bare opt-in from an unauthenticated caller is ignored, so it can
+        // never cause Devin credentials to be read or the RPC to fire.
+        const devinParam = url.searchParams.get("devin");
+        const devinEnabled =
+          (devinParam === "1" || devinParam === "true") &&
+          isAuthorizedLocalMutation(req);
         const data = await getUsageLimits({
           home: os.homedir(),
           env: process.env,
@@ -3227,6 +3235,7 @@ function createLocalApiHandler({ queuePath }) {
           // Punches through the Claude disk fresh-cache (but not the 429
           // cooldown) — an explicit user refresh should hit upstream.
           forceRefresh,
+          devinEnabled,
         });
         json(res, data);
       } catch (e) {

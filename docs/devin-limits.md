@@ -6,6 +6,8 @@ TokenTracker exposes **Devin** (devin.ai) as a usage-limits provider. The provid
 
 Quota display only: there is no local session token parsing for Devin, no spending enforcement and no billing manager. The bars are always the server's own numbers.
 
+Devin is **opt-in and off by default**. The existing provider switch in Settings → Usage & Limits → Providers is the single selection fact: while it is off, TokenTracker never reads the Devin CLI credentials or calls the endpoint, and any retained rows are hidden; turning it on sends a locally authenticated `devin=1` opt-in on each quota request and displays the result. Finding Devin credentials never enables the provider by itself.
+
 ## Data source
 
 The only endpoint is the official seat-management RPC the Devin web app itself calls:
@@ -76,11 +78,11 @@ Every failure surfaces through owned, fixed messages — the provider never forw
 
 ## Implementation boundaries
 
-The implementation lives in `src/lib/devin-limits.js`, whose only export is `fetchDevinLimits({ home, env, fetchImpl })`. It is wired into the shared provider poll in `src/lib/usage-limits.js`, which owns freshness (`stale`, `cached_at`) and reuses the existing timeout, single-flight, two-minute cache and provenance machinery. The provider shares the generic `primary_window` / `secondary_window` schema, so dashboard, macOS and widget surfaces consume it like any other two-window provider.
+The implementation lives in `src/lib/devin-limits.js`, whose only export is `fetchDevinLimits({ home, env, fetchImpl, enabled })` — `enabled` is the request-scoped opt-in threaded from `GET /functions/tokentracker-usage-limits?devin=1` (accepted only on locally authenticated requests) through `getUsageLimits`; when it is false the provider returns the not-configured shape without touching the credentials file or the network. It is wired into the shared provider poll in `src/lib/usage-limits.js`, which owns freshness (`stale`, `cached_at`) and reuses the existing timeout, single-flight, two-minute cache and provenance machinery — the aggregate cache and in-flight slots are partitioned by the Devin selection so a disabled caller can never receive an enabled result. The provider shares the generic `primary_window` / `secondary_window` schema, so dashboard, macOS and widget surfaces consume it like any other two-window provider.
 
 ## Tests and validation
 
-`test/devin-limits.test.js` covers credential discovery (including `$XDG_DATA_HOME` and a synthetic test home), the request shape, window normalization including the implicit-zero and hide-flag rules, malformed payloads, authentication classification and error redaction. Dashboard coverage lives in `UsageLimitsPanel.test.jsx`; native coverage in `TokenTrackerBarTests`.
+`test/devin-limits.test.js` covers credential discovery (including `$XDG_DATA_HOME` and a synthetic test home), the request shape, window normalization including the implicit-zero and hide-flag rules, malformed payloads, authentication classification and error redaction. The opt-in gate, selection-partitioned cache and unauthenticated `devin=1` rejection are covered in `test/usage-limits.test.js` and `test/local-api-security.test.js`; selection-driven fetching in `use-usage-limits.test.ts`; native default-off and retained-snapshot stripping in `TokenTrackerBarTests`.
 
 ```bash
 node --test test/devin-limits.test.js

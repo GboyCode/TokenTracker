@@ -126,7 +126,10 @@ function normalizeResetMs(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) throw malformed("quota reset timestamp");
   const ms = n * 1000;
-  return Number.isFinite(new Date(ms).getTime()) ? ms : null;
+  if (!Number.isFinite(new Date(ms).getTime())) {
+    throw malformed("quota reset timestamp");
+  }
+  return ms;
 }
 
 function normalizeWindow({ remainingPercent, resetUnix, hidden, windowSeconds }) {
@@ -182,11 +185,15 @@ function normalizePlanStatus(body) {
   };
 }
 
-// `{ configured: false }` without a Devin CLI sign-in, otherwise the
-// normalized windows. Throws owned errors only — never raw upstream bodies,
-// filesystem paths or token values. `code: "AUTH_EXPIRED"` flags genuine auth
-// failure for the aggregator's auth_action_required path.
-async function fetchDevinLimits({ home, env = process.env, fetchImpl = fetch } = {}) {
+// `{ configured: false }` when the provider is not enabled or no Devin CLI
+// sign-in exists, otherwise the normalized windows. `enabled` is the user's
+// explicit provider selection forwarded from the local API — without it the
+// credentials file is never opened and no request is made. Throws owned
+// errors only — never raw upstream bodies, filesystem paths or token values.
+// `code: "AUTH_EXPIRED"` flags genuine auth failure for the aggregator's
+// auth_action_required path.
+async function fetchDevinLimits({ home, env = process.env, enabled = false, fetchImpl = fetch } = {}) {
+  if (enabled !== true) return { configured: false };
   const credentials = readDevinCredentials({ home, env });
   if (!credentials) return { configured: false };
 
