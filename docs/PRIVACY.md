@@ -1,6 +1,6 @@
 # Privacy Policy
 
-_Last updated: 2026-09-09 · Applies to the `tokentracker-cli` npm package, the macOS app, the Windows app, the Linux app, and [www.tokentracker.cc](https://www.tokentracker.cc)._
+_Last updated: 2026-09-12 · Applies to the `tokentracker-cli` npm package, the macOS app, the Windows app, the Linux app, and [www.tokentracker.cc](https://www.tokentracker.cc)._
 
 TokenTracker reads the local logs that AI coding tools already write to your disk, and turns them into token counts and cost estimates. It is local-first: the dashboard, the parsers and the database all run on your machine.
 
@@ -73,6 +73,7 @@ Audit: [`src/lib/telemetry.js`](../src/lib/telemetry.js), [`dashboard/src/lib/an
 
 | Request | Destination | What is sent | Trigger |
 |---|---|---|---|
+| **Devin quota read** | `server.codeium.com` (Devin's official `GetPlanStatus` RPC) | An empty JSON body, authenticated with the Devin CLI session token already stored on your machine. The token is never persisted or logged by TokenTracker. | Off by default — only while the Devin provider switch in Settings → Usage & Limits → Providers is on, and only on a locally authenticated request |
 | **Cloud sync / leaderboard** | `srctyff5.us-east.insforge.app` | Hourly buckets only — see §4 | Signing in to a TokenTracker account |
 | **Exchange rates** | `open.er-api.com` | Nothing but the request itself | Selecting a non-USD display currency |
 | **Desktop pet download** | `codex-pets.net` | The pet id you chose | Importing a pet from a link |
@@ -121,7 +122,7 @@ Signing in is **entirely optional**. TokenTracker is fully functional without an
 | GitHub | Source hosting, releases, OAuth, star counts, upstream pricing data (`raw.githubusercontent.com`) | [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement) |
 | Google | OAuth sign-in, fonts on share cards | [policies.google.com/privacy](https://policies.google.com/privacy) |
 
-AI providers whose quota endpoints TokenTracker reads (Anthropic, OpenAI, Cursor, GitHub Copilot, Google, Moonshot, Z.ai, Qoder, …) are governed by their own policies. TokenTracker acts on your behalf with credentials already on your machine; it does not create any new relationship with them.
+AI providers whose quota endpoints TokenTracker reads (Anthropic, OpenAI, Cursor, GitHub Copilot, Google, Moonshot, Z.ai, Qoder, Devin, …) are governed by their own policies. TokenTracker acts on your behalf with credentials already on your machine; it does not create any new relationship with them.
 
 ---
 

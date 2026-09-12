@@ -39,6 +39,7 @@ enum LimitResetProviderIconCatalog {
         case "qoder": return "qoder.svg"
         case "codingPlan": return "volcano-ark.svg"
         case "agentPlan": return "volcano-ark.svg"
+        case "devin": return "devin.svg"
         default: return nil
         }
     }
@@ -276,6 +277,12 @@ extension UsageLimitsResponse {
                 ("primary", "5h", agentPlan.primaryWindow),
                 ("secondary", "Weekly", agentPlan.secondaryWindow),
                 ("tertiary", "Monthly", agentPlan.tertiaryWindow),
+            ])
+        }
+        if let devin {
+            addGeneric("devin", devin.configured, devin.error, [
+                ("primary", "Daily", devin.primaryWindow),
+                ("secondary", "Weekly", devin.secondaryWindow),
             ])
         }
 

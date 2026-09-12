@@ -794,5 +794,13 @@
   "limits.commandCode.setupHint.snippet_login_windows": "cmdc auth login",
   "limits.commandCode.setupHint.snippet_env_windows": "$token = Read-Host -AsSecureString\\n$env:COMMAND_CODE_API_KEY = [System.Net.NetworkCredential]::new('', $token).Password\\n[Environment]::SetEnvironmentVariable('COMMAND_CODE_API_KEY', $env:COMMAND_CODE_API_KEY, 'User')",
   "limits.commandCode.setupHint.note_windows": "Windows：在 PowerShell 中运行，然后重启 TokenTracker。",
-  "limits.commandCode.setupHint.note_linux": "Linux：从当前终端启动 TokenTracker，以读取环境变量。"
+  "limits.commandCode.setupHint.note_linux": "Linux：从当前终端启动 TokenTracker，以读取环境变量。",
+  "limits.provider.devin": "Devin",
+  "limits.label.devin_daily": "每日",
+  "limits.label.devin_weekly": "每周",
+  "limits.devin.setupHint.title": "连接 Devin",
+  "limits.devin.setupHint.subtitle": "使用本机 Devin CLI 保存的登录读取你的 Devin 订阅额度。",
+  "limits.devin.setupHint.step1": "安装 Devin CLI 并运行下方命令登录，TokenTracker 自动复用登录，无需重启。",
+  "limits.devin.setupHint.note": "登录后刷新此页即可。TokenTracker 只会将保存的会话令牌发送到 Devin 官方额度接口。",
+  "limits.devin.setupHint.snippet_login": "devin auth login   # 登录 Devin"
 }

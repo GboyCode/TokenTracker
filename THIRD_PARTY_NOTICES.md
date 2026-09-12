@@ -62,5 +62,5 @@ official Devin "nodes" mark published by Cognition at
 `https://app.devin.ai/assets/pwa/apple-touch-icon.png` (also
 `https://app.devin.ai/assets/pwa/pwa-icon-192.png`). The Devin name and logo
 are trademarks of Cognition; the mark is bundled solely to identify the Devin
-CLI source in the usage dashboard, recoloured to `currentColor` like the
+CLI source and subscription quota in the dashboard, recoloured to `currentColor` like the
 other provider marks.

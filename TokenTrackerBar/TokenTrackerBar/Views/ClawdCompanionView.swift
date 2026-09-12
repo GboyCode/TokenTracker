@@ -1595,6 +1595,11 @@ struct ClawdCompanionView: View {
                 ("Ultimate Free Calls", qoder.secondaryWindow)
             ])
         }
+        if let devin = limits.devin {
+            generic("devin", configured: devin.configured, error: devin.error, windows: [
+                ("Daily", devin.primaryWindow), ("Weekly", devin.secondaryWindow)
+            ])
+        }
 
         return readings
             .filter { $0.usedPercent > 0 && $0.usedPercent < 100 }

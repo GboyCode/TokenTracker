@@ -41,6 +41,8 @@ enum MenuBarDisplayMetric: String, CaseIterable {
     case commandCodeWeekly
     case qoderQuota
     case qoderUltimate
+    case devinDaily
+    case devinWeekly
 
     var menuLabel: String {
         switch self {
@@ -86,6 +88,8 @@ enum MenuBarDisplayMetric: String, CaseIterable {
         case .commandCodeWeekly: return "CC Wk"
         case .qoderQuota: return "Qd Cred"
         case .qoderUltimate: return "Qd Ult"
+        case .devinDaily: return "Dv Day"
+        case .devinWeekly: return "Dv Wk"
         }
     }
 
@@ -131,6 +135,8 @@ enum MenuBarDisplayMetric: String, CaseIterable {
         case .commandCodeWeekly: return "Command Code Weekly Limit"
         case .qoderQuota: return "Qoder Credits Limit"
         case .qoderUltimate: return "Qoder Ultimate Free Calls"
+        case .devinDaily: return "Devin Daily Limit"
+        case .devinWeekly: return "Devin Weekly Limit"
         }
     }
 
@@ -151,7 +157,8 @@ enum MenuBarDisplayMetric: String, CaseIterable {
              .zcodeGlm52, .zcodeGlm5Turbo,
              .opencodeGo5h, .opencodeGoWeekly, .opencodeGoMonthly,
              .commandCode5h, .commandCodeWeekly,
-             .qoderQuota, .qoderUltimate:
+             .qoderQuota, .qoderUltimate,
+             .devinDaily, .devinWeekly:
             return "limits"
         }
     }
@@ -176,6 +183,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
         case .opencodeGo5h, .opencodeGoWeekly, .opencodeGoMonthly: return "opencodeGo"
         case .commandCode5h, .commandCodeWeekly: return "commandCode"
         case .qoderQuota, .qoderUltimate: return "qoder"
+        case .devinDaily, .devinWeekly: return "devin"
         }
     }
 }
@@ -207,6 +215,7 @@ private extension UsageLimitsResponse {
         case "opencodeGo": return (opencodeGo?.configured == true) && (opencodeGo?.error == nil)
         case "commandCode": return (commandCode?.configured == true) && (commandCode?.error == nil)
         case "qoder": return (qoder?.configured == true) && (qoder?.error == nil)
+        case "devin": return (devin?.configured == true) && (devin?.error == nil)
         default: return false
         }
     }
@@ -250,6 +259,8 @@ private extension UsageLimitsResponse {
         case .commandCodeWeekly: return commandCode?.secondaryWindow != nil
         case .qoderQuota: return qoder?.primaryWindow != nil
         case .qoderUltimate: return qoder?.secondaryWindow != nil
+        case .devinDaily: return devin?.primaryWindow != nil
+        case .devinWeekly: return devin?.secondaryWindow != nil
         }
     }
 }
@@ -359,7 +370,8 @@ enum MenuBarDisplayPreferences {
                  .zcodeGlm52, .zcodeGlm5Turbo,
                  .opencodeGo5h, .opencodeGoWeekly, .opencodeGoMonthly,
                  .commandCode5h, .commandCodeWeekly,
-                 .qoderQuota, .qoderUltimate:
+                 .qoderQuota, .qoderUltimate,
+                 .devinDaily, .devinWeekly:
                 break
             }
         }

@@ -31,6 +31,7 @@ const { fetchGrokLimits } = require("./grok-limits");
 const { fetchZcodeLimits } = require("./zcode-limits");
 const { fetchOpencodeGoLimits } = require("./opencode-go-limits");
 const { fetchCommandcodeLimits } = require("./commandcode-limits");
+const { fetchDevinLimits } = require("./devin-limits");
 const { fetchQoderLimits, fetchQoderCnLimits } = require("./qoder-limits");
 const { fetchArkCodingPlanLimits } = require("./ark-coding-plan-limits");
 const { fetchArkAgentPlanLimits } = require("./ark-agent-plan-limits");
@@ -47,7 +48,15 @@ const execFileAsync = promisify(cp.execFile);
 // 2-minute in-memory cache. It also expires early at the earliest upcoming window
 // reset in the cached data (see cacheExpiresAtMs), floored so a provider reporting
 // a reset "right now" can't turn every poll into a full upstream round.
-let cache = { data: null, expiresAtMs: 0 };
+// Partitioned by the Devin opt-in selection so a request made while Devin is
+// off is never served (or joined onto) a response fetched while it was on.
+const cacheByDevinSelection = {
+  off: { data: null, expiresAtMs: 0 },
+  on: { data: null, expiresAtMs: 0 },
+};
+function devinSelectionKey(options) {
+  return options?.devinEnabled === true ? "on" : "off";
+}
 const CACHE_TTL_MS = 2 * 60 * 1000;
 // Must stay below the macOS app's post-reset re-fetch grace (10s in
 // DashboardViewModel.resetBoundaryGrace), or that targeted refresh would be
@@ -3686,7 +3695,7 @@ function withPlanLabel(obj, raw, brand) {
 // hammered). Survives an external resetUsageLimitsCache() (refresh=1 path in
 // local-api.js): a refresh arriving while a fetch is already running reuses that
 // in-flight fetch and returns its result.
-let inFlightFetch = null;
+const inFlightByDevinSelection = { off: null, on: null };
 
 // Codex stamps reset_at as unix seconds; every other provider (and Claude's
 // resets_at) uses ISO strings. Numbers that look like epoch milliseconds are
@@ -3724,17 +3733,19 @@ function cacheExpiresAtMs(data, fetchedAtMs) {
 }
 
 async function getUsageLimits(options = {}) {
+  const selection = devinSelectionKey(options);
+  const cache = cacheByDevinSelection[selection];
   const nowMs = Date.now();
   if (cache.data && nowMs < cache.expiresAtMs) {
     return cache.data;
   }
-  if (inFlightFetch) {
-    return inFlightFetch;
+  if (inFlightByDevinSelection[selection]) {
+    return inFlightByDevinSelection[selection];
   }
   const promise = fetchUsageLimitsUncached(options).finally(() => {
-    if (inFlightFetch === promise) inFlightFetch = null;
+    if (inFlightByDevinSelection[selection] === promise) inFlightByDevinSelection[selection] = null;
   });
-  inFlightFetch = promise;
+  inFlightByDevinSelection[selection] = promise;
   return promise;
 }
 
@@ -3749,6 +3760,7 @@ async function fetchUsageLimitsUncached({
   now = new Date(),
   providerTimeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS,
   forceRefresh = false,
+  devinEnabled = false,
 } = {}) {
   const nowMs = Date.now();
 
@@ -3810,7 +3822,7 @@ async function fetchUsageLimitsUncached({
     : null;
 
   const providerFetch = withFetchTimeout(fetchImpl, providerTimeoutMs);
-  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, claudeServiceStatus] = await Promise.all([
+  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, claudeServiceStatus] = await Promise.all([
     claudeToken && !freshClaudeCache && !claudeRetryAtMs
       ? withProviderTimeout(fetchClaudeUsageLimits(claudeToken, { fetchImpl: providerFetch, maxAttempts: 1 }), "Claude", providerTimeoutMs).then(
           (value) => ({ status: "fulfilled", value }),
@@ -3920,6 +3932,16 @@ async function fetchUsageLimitsUncached({
     // timeouts (whoami, then credits+subscriptions) could hold the aggregate
     // ~2x longer than any sibling provider.
     withProviderTimeout(fetchCommandcodeLimits({ home, env, fetchImpl: providerFetch }), "CommandCode", providerTimeoutMs)
+      .then(
+        (value) => ({ status: "fulfilled", value }),
+        (reason) => ({ status: "rejected", reason }),
+      ),
+    // Devin (devin.ai): daily/weekly subscription quota from the official
+    // GetPlanStatus RPC, keyed by the session token the Devin CLI stores in
+    // ~/.local/share/devin/credentials.toml. No local fallback — window state
+    // lives server-side. fetchDevinLimits throws on auth expiry so the
+    // assemble step below can flag auth_action_required.
+    withProviderTimeout(fetchDevinLimits({ home, env, enabled: devinEnabled === true, fetchImpl: providerFetch }), "Devin", providerTimeoutMs)
       .then(
         (value) => ({ status: "fulfilled", value }),
         (reason) => ({ status: "rejected", reason }),
@@ -4134,6 +4156,22 @@ async function fetchUsageLimitsUncached({
       : { configured: true, error: reason?.message || "Unknown error" };
   }
 
+  // Devin: server-owned quota windows like CommandCode — a fulfilled
+  // `configured: false` means no CLI credentials; a rejected fetch with
+  // AUTH_EXPIRED flags auth_action_required for the re-sign-in hint.
+  let devinObj;
+  if (devinRaw?.status === "fulfilled") {
+    const value = devinRaw.value;
+    devinObj = value && value.configured === false
+      ? value
+      : { ...value, stale: false, cached_at: new Date(nowMs).toISOString() };
+  } else {
+    const reason = devinRaw?.reason || null;
+    devinObj = reason?.code === "AUTH_EXPIRED"
+      ? { configured: true, error: reason?.message || "Unknown error", auth_action_required: "reauth" }
+      : { configured: true, error: reason?.message || "Unknown error" };
+  }
+
   const data = {
     fetched_at: new Date(nowMs).toISOString(),
     claude: withPlanLabel(claude, claudePlanType, "Claude"),
@@ -4155,6 +4193,9 @@ async function fetchUsageLimitsUncached({
     // maps plan ids to the CLI's exact display strings, so skip the shared
     // Title-Case normalization ("Goat") and surface them as-is.
     commandCode: commandCodeObj,
+    // Devin's planName ("Pro", "Max") is already the official display name —
+    // Title-Case normalization is still harmless and strips any brand prefix.
+    devin: withPlanLabel(devinObj, devinObj?.plan_label, "Devin"),
     qoder: withPlanLabel(qoder, qoder?.plan_label, "Qoder"),
     qoderCn: withPlanLabel(qoderCn, qoderCn?.plan_label, "Qoder CN"),
     codingPlan: withPlanLabel(codingPlan, codingPlan?.plan_label, "Ark Coding Plan"),
@@ -4182,12 +4223,16 @@ async function fetchUsageLimitsUncached({
     };
   }
 
-  cache = { data, expiresAtMs: cacheExpiresAtMs(data, nowMs) };
+  cacheByDevinSelection[devinSelectionKey({ devinEnabled })] = {
+    data,
+    expiresAtMs: cacheExpiresAtMs(data, nowMs),
+  };
   return data;
 }
 
 function resetUsageLimitsCache() {
-  cache = { data: null, expiresAtMs: 0 };
+  cacheByDevinSelection.off = { data: null, expiresAtMs: 0 };
+  cacheByDevinSelection.on = { data: null, expiresAtMs: 0 };
 }
 
 module.exports = {

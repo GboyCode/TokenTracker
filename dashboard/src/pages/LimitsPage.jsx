@@ -212,6 +212,7 @@ export function LimitsPage() {
                 qoderCn={usageLimits?.qoderCn}
                 codingPlan={usageLimits?.codingPlan}
                 agentPlan={usageLimits?.agentPlan}
+                devin={usageLimits?.devin}
                 order={prefs.order}
                 visibility={prefs.visibility}
                 displayMode={prefs.displayMode}

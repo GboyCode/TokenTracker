@@ -247,6 +247,62 @@ final class WeeklyLimitResetDetectorTests: XCTestCase {
         )
     }
 
+    func testDevinDecodesOptionalWindowsAndEmitsReadings() throws {
+        // Devin windows are optional: a weekly-only plan must not fabricate a
+        // daily reading, and a hidden/absent window must never fire.
+        let json = """
+        {
+          "fetched_at": "2026-09-12T00:00:00Z",
+          "claude": { "configured": false },
+          "codex": { "configured": false },
+          "cursor": { "configured": false },
+          "gemini": { "configured": false },
+          "kiro": { "configured": false },
+          "antigravity": { "configured": false },
+          "devin": {
+            "configured": true,
+            "error": null,
+            "plan_label": "Pro",
+            "primary_window": { "used_percent": 40, "reset_at": "2026-09-13T08:00:00Z", "limit_window_seconds": 86400 },
+            "secondary_window": { "used_percent": 90, "reset_at": "2026-09-20T08:00:00Z", "limit_window_seconds": 604800 }
+          }
+        }
+        """
+        let response = try JSONDecoder().decode(UsageLimitsResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response.devin?.planLabel, "Pro")
+        XCTAssertEqual(response.devin?.primaryWindow?.limitWindowSeconds, 86400)
+
+        let readings = response.limitWindowReadings()
+        XCTAssertEqual(readings.map { $0.windowKey }, ["devin.primary", "devin.secondary"])
+        XCTAssertEqual(readings.map { $0.windowLabel }, ["Daily", "Weekly"])
+        XCTAssertEqual(readings.map { $0.usedPercent }, [40, 90])
+        XCTAssertEqual(LimitResetProviderIconCatalog.svgFilename(for: "devin"), "devin.svg")
+    }
+
+    func testDevinWeeklyOnlyPlanSkipsAbsentDailyWindow() throws {
+        let json = """
+        {
+          "fetched_at": "2026-09-12T00:00:00Z",
+          "claude": { "configured": false },
+          "codex": { "configured": false },
+          "cursor": { "configured": false },
+          "gemini": { "configured": false },
+          "kiro": { "configured": false },
+          "antigravity": { "configured": false },
+          "devin": {
+            "configured": true,
+            "error": null,
+            "primary_window": null,
+            "secondary_window": { "used_percent": 25, "reset_at": "2026-09-20T08:00:00Z" }
+          }
+        }
+        """
+        let response = try JSONDecoder().decode(UsageLimitsResponse.self, from: Data(json.utf8))
+        XCTAssertNil(response.devin?.primaryWindow ?? nil)
+        let readings = response.limitWindowReadings()
+        XCTAssertEqual(readings.map { $0.windowKey }, ["devin.secondary"])
+    }
+
     func testCelebrationProviderIconMappingsCoverAssetAndSVGProviders() {
         XCTAssertEqual(LimitResetProviderIconCatalog.assetName(for: "claude"), "ClaudeLogo")
         XCTAssertEqual(LimitResetProviderIconCatalog.assetName(for: "antigravity"), "AntigravityLogo")
