@@ -18,10 +18,11 @@ struct UsageLimitsResponse: Codable, Equatable {
     let qoderCn: QoderLimits?
     let codingPlan: CodingPlanLimits?
     let agentPlan: AgentPlanLimits?
+    let devin: DevinLimits?
 
     enum CodingKeys: String, CodingKey {
         case fetchedAt = "fetched_at"
-        case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan
+        case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin
         case opencodeGo = "opencodeGo"
         case commandCode = "commandCode"
     }
@@ -111,6 +112,10 @@ extension UsageLimitsResponse {
             return guarded(qoder?.configured, qoder?.error, qoder?.primaryWindow?.usedPercent)
         case .qoderUltimate:
             return guarded(qoder?.configured, qoder?.error, qoder?.secondaryWindow?.usedPercent)
+        case .devinDaily:
+            return guarded(devin?.configured, devin?.error, devin?.primaryWindow?.usedPercent)
+        case .devinWeekly:
+            return guarded(devin?.configured, devin?.error, devin?.secondaryWindow?.usedPercent)
         }
     }
 }
@@ -575,6 +580,42 @@ struct CodingPlanLimits: Codable, Equatable {
 
 typealias AgentPlanLimits = CodingPlanLimits
 
+/// Devin (devin.ai): daily + weekly subscription quota read from the official
+/// GetPlanStatus RPC by the local server, keyed by the Devin CLI's saved
+/// sign-in. Mirror of CommandCodeLimits minus the subscription status.
+struct DevinLimits: Codable, Equatable {
+    let configured: Bool
+    let error: String?
+    let planLabel: String?
+    let primaryWindow: GenericLimitWindow?
+    let secondaryWindow: GenericLimitWindow?
+    let cachedAt: String?
+    let stale: Bool?
+    let authActionRequired: String?
+
+    enum CodingKeys: String, CodingKey {
+        case configured, error, stale
+        case planLabel = "plan_label"
+        case primaryWindow = "primary_window"
+        case secondaryWindow = "secondary_window"
+        case cachedAt = "cached_at"
+        case authActionRequired = "auth_action_required"
+    }
+
+    /// The shape published while the Devin provider switch is off — no
+    /// previously fetched windows may outlive the user's selection.
+    static let unconfigured = DevinLimits(
+        configured: false,
+        error: nil,
+        planLabel: nil,
+        primaryWindow: nil,
+        secondaryWindow: nil,
+        cachedAt: nil,
+        stale: nil,
+        authActionRequired: nil
+    )
+}
+
 struct AntigravityLimits: Codable, Equatable {
     let configured: Bool
     let error: String?
@@ -621,6 +662,7 @@ extension UsageLimitsResponse {
             (qoderCn?.configured ?? false, qoderCn?.error),
             (codingPlan?.configured ?? false, codingPlan?.error),
             (agentPlan?.configured ?? false, agentPlan?.error),
+            (devin?.configured ?? false, devin?.error),
         ]
         return providers.contains { $0.0 && $0.1 == nil }
     }
@@ -634,5 +676,77 @@ extension UsageLimitsResponse {
     ) -> UsageLimitsResponse {
         guard let current, !incoming.hasAnyProviderWithoutError else { return incoming }
         return current
+    }
+
+    /// Devin rows must never outlive the user's provider selection. While the
+    /// switch is off, retained/cached payloads are rewritten to the
+    /// not-configured shape so views, widgets and reset detection all agree.
+    func applyingDevinSelection(_ selected: Bool) -> UsageLimitsResponse {
+        guard !selected, let devin, devin != .unconfigured else { return self }
+        return UsageLimitsResponse(
+            fetchedAt: fetchedAt,
+            claude: claude,
+            codex: codex,
+            cursor: cursor,
+            gemini: gemini,
+            kimi: kimi,
+            kiro: kiro,
+            grok: grok,
+            antigravity: antigravity,
+            copilot: copilot,
+            zcode: zcode,
+            opencodeGo: opencodeGo,
+            commandCode: commandCode,
+            qoder: qoder,
+            qoderCn: qoderCn,
+            codingPlan: codingPlan,
+            agentPlan: agentPlan,
+            devin: .unconfigured
+        )
+    }
+}
+
+/// Latest-request authority for usage-limits publications. Every refresh takes
+/// a ticket when it starts and a Devin selection transition invalidates every
+/// outstanding ticket immediately — even before the replacement refresh has
+/// begun. Only the newest ticket may publish, so a late response fetched under
+/// a superseded selection (including on→off→on cycles) can never overwrite the
+/// display record, the disk cache, reset detection or boundary scheduling.
+struct UsageLimitsPublicationAuthority {
+    private var generation = 0
+
+    /// Ticket identifying a new refresh. Overlapping same-selection requests
+    /// resolve latest-wins because every begin supersedes the previous ticket.
+    mutating func beginRequest() -> Int {
+        generation += 1
+        return generation
+    }
+
+    /// A selection transition supersedes in-flight work before its replacement
+    /// refresh has even started.
+    mutating func invalidateForSelectionChange() {
+        generation += 1
+    }
+
+    /// `ticket` still owns the publication right only while no newer refresh
+    /// or selection change has superseded it.
+    func isCurrent(_ ticket: Int) -> Bool {
+        ticket == generation
+    }
+
+    /// The publication decision every completed refresh must pass: superseded
+    /// work returns nil and may not touch display, cache, reset detection or
+    /// scheduling; current work returns the display record — incoming unless
+    /// it carries no usable provider while a good record exists — with Devin
+    /// rows rewritten when the selection is off.
+    func publish(
+        ticket: Int,
+        incoming: UsageLimitsResponse,
+        devinSelected: Bool,
+        current: UsageLimitsResponse?
+    ) -> UsageLimitsResponse? {
+        guard isCurrent(ticket) else { return nil }
+        return UsageLimitsResponse.displayRecord(current: current, incoming: incoming)
+            .applyingDevinSelection(devinSelected)
     }
 }

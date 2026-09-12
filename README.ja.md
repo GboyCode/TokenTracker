@@ -94,7 +94,7 @@ brew install xiufengsun/tokentracker/tokentracker
 - 📊 **美しいダッシュボード** — 使用トレンド、モデル別コスト内訳、GitHub スタイルのアクティビティヒートマップ、プロジェクト別の帰属表示
 - 🖥️ **ネイティブデスクトップアプリ** — macOS メニューバー（ウィジェット付き）と Windows システムトレイ。それぞれ組み込みサーバーとネイティブ WebView のダッシュボードを備えます
 - 🎨 **4 種類のデスクトップウィジェット** — Pin Usage / Activity Heatmap / Top Models / Usage Limits をデスクトップに固定
-- 📈 **リアルタイムの利用上限** — Claude / Codex / Cursor / Gemini / Kimi / Kiro / Grok / Copilot / Antigravity / ZCode / OpenCode Go / Qoder / Qoder CN / Command Code の上限を表示し、ローカル provider アプリが一時的に終了しても last-good キャッシュを保持
+- 📈 **リアルタイムの利用上限** — Claude / Codex / Cursor / Gemini / Kimi / Kiro / Grok / Copilot / Antigravity / ZCode / OpenCode Go / Qoder / Qoder CN / Command Code / Ark Coding Plan / Ark Agent Plan / Devin の上限を表示し、ローカル provider アプリが一時的に終了しても last-good キャッシュを保持
 - 🟢 **サービス状況ページ** — 8 つの公式 provider ステータスページから稼働状況と障害情報を表示
 - 💰 **コストエンジン** — [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 経由で 2,200+ モデルの価格設定（毎日自動更新）に加え、ニッチなツール（Kiro、Cursor Composer、Kimi、CodeBuddy hy3）向けに厳選された上書き設定。24 時間のディスクキャッシュ + 同梱のオフラインスナップショットにより、ネット接続なしでも正確な USD 表示が可能です。ベンダーが公式価格を公開していないモデル（例: Tencent hy3-preview）はトークン数のみ追跡され、ベンダーが料金を公開するまでコストは $0 と表示されます。
 - 🌐 **オプションのリーダーボード** — 世界中の開発者と比較。ドラッグで列を並び替えて、気になるプロバイダーに絞り込めます（オプトイン制、参加にはサインインが必要）
@@ -230,7 +230,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **ローカルファースト解析** | ✅ | ✅ | ✅ |
 | **ネイティブデスクトップアプリ** | ✅ macOS, Windows, Linux | ❌ | ❌ |
 | **デスクトップウィジェット** | ✅ 4 種類 | ❌ | ❌ |
-| **レート制限トラッキング** | ✅ 14 プロバイダー | 限定的（Claude の利用枠） | 複数のプロバイダーに対応 |
+| **レート制限トラッキング** | ✅ 17 プロバイダー | 限定的（Claude の利用枠） | 複数のプロバイダーに対応 |
 | **ターミナル分析** | 基本的な CLI（`status`, `--json`） | 充実した CLI レポート | リッチな対話型 TUI & CLI |
 | **JSON エクスポート** | ✅ | ✅ | ✅ |
 | **公開リーダーボード** | 任意（オプトイン） | ❌ | 任意（`submit`） |

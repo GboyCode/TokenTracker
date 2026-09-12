@@ -443,6 +443,8 @@ const PROVIDER_LOGO_MAP = {
   "QODER-CN": "/brand-logos/qoder-cn.svg",
   // Volcano Ark (火山方舟) Coding Plan — the Volcengine 3-mountain mark.
   "VOLCANO-ARK": "/brand-logos/volcano-ark.svg",
+  // Devin (devin.ai) — the three-hexagon "nodes" mark, mono like Qoder.
+  DEVIN: "/brand-logos/devin.svg",
 };
 
 // AnythingLLM publishes this compact mark in white. Keep the official asset
@@ -454,6 +456,8 @@ const PROVIDER_LOGO_CLASS_MAP = {
   // as AnythingLLM: black on light backgrounds, native white on dark.
   PI: "brightness-0 dark:brightness-100",
   QODER: "dark:invert",
+  // The Devin nodes mark ships as a black currentColor trace — same
+  // dark-mode inversion treatment as the Qoder mark.
   DEVIN: "dark:invert",
   // The sail PNG is solid black on transparent — invert to white in dark
   // mode so it doesn't disappear against the dark dashboard background.

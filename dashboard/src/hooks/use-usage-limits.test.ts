@@ -3,6 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getUsageLimits } from "../lib/api";
 import { publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
 import { useUsageLimits } from "./use-usage-limits";
+import { LIMITS_PREFS_CHANGED_EVENT } from "./use-limits-display-prefs.js";
+
+const VISIBILITY_KEY = "tt.limits.providerVisibility";
+
+function saveDevinSelection(selected: boolean) {
+  window.localStorage.setItem(VISIBILITY_KEY, JSON.stringify({ devin: selected }));
+}
+
+function dispatchPrefsChanged() {
+  window.dispatchEvent(new Event(LIMITS_PREFS_CHANGED_EVENT));
+}
 
 vi.mock("../lib/api", () => ({
   getUsageLimits: vi.fn(),
@@ -44,6 +55,7 @@ const existingLimits = {
   qoder: { configured: false },
   codingPlan: { configured: false },
   agentPlan: { configured: false },
+  devin: { configured: false },
 };
 
 const freshLimits = {
@@ -78,6 +90,7 @@ const freshLimits = {
 
 describe("useUsageLimits", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     vi.mocked(getUsageLimits).mockReset();
     vi.mocked(publishUsageLimitsPreloadState).mockReset();
   });
@@ -101,7 +114,7 @@ describe("useUsageLimits", () => {
 
     // Mount fetch reads the server cache (no forced upstream refresh).
     expect(getUsageLimits).toHaveBeenCalledTimes(1);
-    expect(getUsageLimits).toHaveBeenCalledWith();
+    expect(getUsageLimits).toHaveBeenCalledWith({ devinEnabled: false });
     expect(result.current.data?.codex.reset_credits).toEqual(freshLimits.codex.reset_credits);
     expect(publishUsageLimitsPreloadState).toHaveBeenCalledWith(freshLimits, {
       source: "page-load",
@@ -119,7 +132,7 @@ describe("useUsageLimits", () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(getUsageLimits).toHaveBeenCalledTimes(1);
-    expect(getUsageLimits).toHaveBeenCalledWith();
+    expect(getUsageLimits).toHaveBeenCalledWith({ devinEnabled: false });
     expect(result.current.data).toEqual(freshLimits);
     expect(result.current.data?.codex.reset_credits).toEqual(freshLimits.codex.reset_credits);
     expect(result.current.error).toBeNull();
@@ -165,7 +178,7 @@ describe("useUsageLimits", () => {
     });
 
     expect(getUsageLimits).toHaveBeenCalledTimes(1);
-    expect(getUsageLimits).toHaveBeenCalledWith({ refresh: true });
+    expect(getUsageLimits).toHaveBeenCalledWith({ refresh: true, devinEnabled: false });
     expect(result.current.data).toEqual(freshLimits);
     expect(publishUsageLimitsPreloadState).toHaveBeenCalledWith(freshLimits, {
       source: "manual-refresh",
@@ -206,5 +219,117 @@ describe("useUsageLimits", () => {
     });
     expect(result.current.data).toEqual(freshLimits);
     expect(result.current.isLoading).toBe(false);
+  });
+});
+
+describe("useUsageLimits Devin opt-in selection", () => {
+  const devinLimits = {
+    ...freshLimits,
+    devin: {
+      configured: true,
+      plan_label: "Pro",
+      primary_window: { used_percent: 40, reset_at: "2026-05-31T08:00:00.000Z" },
+      secondary_window: { used_percent: 90, reset_at: "2026-06-06T08:00:00.000Z" },
+    },
+  };
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.mocked(getUsageLimits).mockReset();
+    vi.mocked(publishUsageLimitsPreloadState).mockReset();
+  });
+
+  it("forwards the opt-in only when the provider switch is on", async () => {
+    saveDevinSelection(true);
+    vi.mocked(getUsageLimits).mockResolvedValue(devinLimits);
+
+    const { result } = renderHook(() => useUsageLimits({ initialRefresh: true }));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(getUsageLimits).toHaveBeenCalledWith({ devinEnabled: true });
+    expect(result.current.data?.devin.configured).toBe(true);
+    expect(result.current.data?.devin.primary_window?.used_percent).toBe(40);
+  });
+
+  it("turning the switch on re-reads limits with the opt-in", async () => {
+    vi.mocked(getUsageLimits).mockResolvedValue(existingLimits);
+    const { result } = renderHook(() => useUsageLimits({ initialRefresh: true }));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    vi.mocked(getUsageLimits).mockResolvedValue(devinLimits);
+    await act(async () => {
+      saveDevinSelection(true);
+      dispatchPrefsChanged();
+    });
+
+    await waitFor(() => expect(result.current.data?.devin.configured).toBe(true));
+    expect(getUsageLimits).toHaveBeenLastCalledWith({ devinEnabled: true });
+  });
+
+  it("turning the switch off drops retained Devin rows before the refetch lands", async () => {
+    saveDevinSelection(true);
+    vi.mocked(getUsageLimits).mockResolvedValue(devinLimits);
+    const { result } = renderHook(() => useUsageLimits({ initialRefresh: true }));
+    await waitFor(() => expect(result.current.data?.devin.configured).toBe(true));
+
+    vi.mocked(getUsageLimits).mockResolvedValue(existingLimits);
+    await act(async () => {
+      saveDevinSelection(false);
+      dispatchPrefsChanged();
+    });
+
+    // Retained Devin rows are gone immediately, without waiting for the network.
+    expect(result.current.data?.devin).toEqual({ configured: false });
+    await waitFor(() => expect(result.current.data).toEqual(existingLimits));
+    expect(getUsageLimits).toHaveBeenLastCalledWith({ devinEnabled: false });
+  });
+
+  it("a response in flight when the switch turns off cannot republish Devin", async () => {
+    saveDevinSelection(true);
+    let resolveMount: ((value: any) => void) | null = null;
+    vi.mocked(getUsageLimits)
+      .mockImplementationOnce(
+        () => new Promise((resolve) => { resolveMount = resolve; }),
+      )
+      .mockResolvedValue(existingLimits);
+
+    const { result } = renderHook(() => useUsageLimits({ initialRefresh: true }));
+    await waitFor(() =>
+      expect(getUsageLimits).toHaveBeenCalledWith({ devinEnabled: true }),
+    );
+
+    await act(async () => {
+      saveDevinSelection(false);
+      dispatchPrefsChanged();
+    });
+    // The off-selection re-read publishes clean data.
+    await waitFor(() => expect(result.current.data).toEqual(existingLimits));
+
+    // The superseded enabled response lands late — its Devin rows must not win.
+    await act(async () => {
+      resolveMount?.(devinLimits);
+    });
+    expect(result.current.data?.devin).toEqual({ configured: false });
+  });
+
+  it("rewrites Devin rows in stale payloads and preloaded state while the switch is off", async () => {
+    // A cached/pre-disable payload can still carry Devin data; while the
+    // selection is off it must publish as not-configured instead.
+    vi.mocked(getUsageLimits).mockResolvedValue(devinLimits);
+    const { result } = renderHook(() =>
+      useUsageLimits({
+        initialRefresh: true,
+        initialState: { data: devinLimits },
+        publishToPreloadCache: true,
+      }),
+    );
+
+    expect(result.current.data?.devin).toEqual({ configured: false });
+    expect(result.current.data?.kimi).toEqual(devinLimits.kimi);
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.data?.devin).toEqual({ configured: false });
+    const published = vi.mocked(publishUsageLimitsPreloadState).mock.calls[0]?.[0] as any;
+    expect(published.devin).toEqual({ configured: false });
   });
 });

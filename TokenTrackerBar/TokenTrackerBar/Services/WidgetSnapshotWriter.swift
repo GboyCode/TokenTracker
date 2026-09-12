@@ -454,6 +454,20 @@ enum WidgetSnapshotWriter {
             }
         }
 
+        // Devin
+        if let devin = limits.devin, devin.configured {
+            if let w = devin.primaryWindow {
+                out.append(LimitProvider(source: "devin", label: "Devin · Daily",
+                                         fraction: w.usedPercent / 100.0,
+                                         resetsAt: parseISO(w.resetAt)))
+            }
+            if let w = devin.secondaryWindow {
+                out.append(LimitProvider(source: "devin", label: "Devin · Weekly",
+                                         fraction: w.usedPercent / 100.0,
+                                         resetsAt: parseISO(w.resetAt)))
+            }
+        }
+
         // GitHub Copilot
         if let copilot = limits.copilot, copilot.configured {
             if let w = copilot.primaryWindow {

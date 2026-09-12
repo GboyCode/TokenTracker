@@ -319,6 +319,7 @@ const PET_LIMIT_PROVIDER_NAMES = {
 const PET_LIMIT_PROVIDER_COPY_NAME_KEYS = {
   agentPlan: "limits.provider.ark_agent_plan",
   commandCode: "limits.provider.command_code",
+  devin: "limits.provider.devin",
 };
 
 // Unix timestamps are normally seconds; values above this order of magnitude
@@ -416,6 +417,10 @@ function collectPetLimitRows(limits) {
     ["5h", limits.agentPlan?.primary_window],
     [copy("limits.label.ark_agent_plan_weekly"), limits.agentPlan?.secondary_window],
     [copy("limits.label.ark_agent_plan_monthly"), limits.agentPlan?.tertiary_window],
+  ]);
+  addGeneric("devin", limits.devin, [
+    [copy("limits.label.devin_daily"), limits.devin?.primary_window],
+    [copy("limits.label.devin_weekly"), limits.devin?.secondary_window],
   ]);
 
   rows.sort((a, b) => {

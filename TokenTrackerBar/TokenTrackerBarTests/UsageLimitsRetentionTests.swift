@@ -113,6 +113,14 @@ final class UsageLimitsRetentionTests: XCTestCase {
         XCTAssertFalse(response.hasAnyProviderWithoutError)
     }
 
+    func testDevinCountsWhenUsable() throws {
+        let response = try decodeResponse(overrides: [
+            "devin": ["configured": true],
+        ])
+
+        XCTAssertTrue(response.hasAnyProviderWithoutError)
+    }
+
     // MARK: - displayRecord retention rule
 
     func testDisplayRecordAdoptsIncomingWhenNoCurrentRecord() throws {
@@ -328,6 +336,55 @@ final class UsageLimitsRetentionTests: XCTestCase {
         let resetCredits = try XCTUnwrap(response.codex.resetCredits)
         XCTAssertEqual(resetCredits.credits.count, 1)
         XCTAssertEqual(resetCredits.credits[0].expiresAt, "2026-07-12T02:13:21.590541Z")
+    }
+
+    // MARK: - Devin opt-in publication
+
+    func testDevinSelectionOffRewritesRetainedRowsToUnconfigured() throws {
+        let withDevin = try decodeResponse(overrides: [
+            "devin": [
+                "configured": true,
+                "plan_label": "Pro",
+                "primary_window": ["used_percent": 40, "reset_at": "2026-06-11T08:00:00Z"],
+            ],
+        ])
+
+        let adjusted = withDevin.applyingDevinSelection(false)
+
+        XCTAssertEqual(adjusted.devin, .unconfigured)
+        XCTAssertFalse(adjusted.devin?.configured ?? true)
+        XCTAssertNil(adjusted.devin?.primaryWindow)
+        XCTAssertTrue(adjusted.hasAnyProviderWithoutError == false)
+    }
+
+    func testDevinSelectionOnKeepsFetchedRows() throws {
+        let withDevin = try decodeResponse(overrides: [
+            "devin": [
+                "configured": true,
+                "primary_window": ["used_percent": 40],
+            ],
+        ])
+
+        XCTAssertEqual(withDevin.applyingDevinSelection(true), withDevin)
+    }
+
+    func testDevinSelectionOffIsIdentityWhenNothingToStrip() throws {
+        let withoutDevin = try decodeResponse()
+
+        XCTAssertEqual(withoutDevin.applyingDevinSelection(false), withoutDevin)
+    }
+
+    func testDevinReadingsDisappearFromResetDetectionWhenOff() throws {
+        let withDevin = try decodeResponse(overrides: [
+            "devin": [
+                "configured": true,
+                "primary_window": ["used_percent": 90, "reset_at": "2026-06-11T08:00:00Z"],
+            ],
+        ])
+
+        XCTAssertTrue(withDevin.limitWindowReadings().contains { $0.provider == "devin" })
+        let adjusted = withDevin.applyingDevinSelection(false)
+        XCTAssertFalse(adjusted.limitWindowReadings().contains { $0.provider == "devin" })
     }
 
     // MARK: - Fixtures
