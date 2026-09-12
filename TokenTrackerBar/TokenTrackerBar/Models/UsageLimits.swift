@@ -141,10 +141,18 @@ enum UsageLimitsCache {
 
     static func save(
         _ limits: UsageLimitsResponse,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        devinSelected: Bool? = nil
     ) {
-        guard limits.hasAnyProviderWithoutError,
-              let data = try? JSONEncoder().encode(limits) else { return }
+        let adjusted = devinSelected.map { limits.applyingDevinSelection($0) } ?? limits
+        // Opting out must remove persisted quota even when it was the only
+        // usable provider. Ordinary all-error refreshes still keep their cache.
+        if devinSelected == false && !adjusted.hasAnyProviderWithoutError {
+            defaults.removeObject(forKey: defaultsKey)
+            return
+        }
+        guard adjusted.hasAnyProviderWithoutError,
+              let data = try? JSONEncoder().encode(adjusted) else { return }
         defaults.set(data, forKey: defaultsKey)
     }
 
@@ -746,7 +754,9 @@ struct UsageLimitsPublicationAuthority {
         current: UsageLimitsResponse?
     ) -> UsageLimitsResponse? {
         guard isCurrent(ticket) else { return nil }
-        return UsageLimitsResponse.displayRecord(current: current, incoming: incoming)
-            .applyingDevinSelection(devinSelected)
+        return UsageLimitsResponse.displayRecord(
+            current: current?.applyingDevinSelection(devinSelected),
+            incoming: incoming.applyingDevinSelection(devinSelected)
+        )
     }
 }

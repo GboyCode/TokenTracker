@@ -41,10 +41,12 @@ struct UsageLimitsView: View {
                 }
 
                 if visibleGroups.isEmpty {
-                    // All hidden by user — show hint so they know gear exists
-                    Text(Strings.allProvidersHidden)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    // Missing quota content does not mean the user hid it.
+                    if LimitsSettingsStore.allProviders.allSatisfy({ !settings.isVisible($0) }) {
+                        Text(Strings.allProvidersHidden)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 } else {
                     ForEach(Array(visibleGroups.enumerated()), id: \.offset) { index, group in
                         if index > 0 {

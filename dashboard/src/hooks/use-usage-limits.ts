@@ -20,7 +20,10 @@ function withoutUnselectedDevin(
   devinSelected: boolean,
 ): UsageLimitsData | null {
   if (!value || devinSelected) return value;
-  if (!value.devin || value.devin.configured === false) return value;
+  if (!value.devin) return value;
+  // Preserve identity only for the exact empty sentinel, never a disabled
+  // payload that still carries quota windows or provider metadata.
+  if (value.devin.configured === false && Object.keys(value.devin).length === 1) return value;
   return { ...value, devin: { configured: false } };
 }
 

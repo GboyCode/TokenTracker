@@ -195,6 +195,35 @@ final class UsageLimitsPublicationTests: XCTestCase {
         )
     }
 
+    func testDisabledDevinCannotDisplaceAnotherProvidersGoodRecord() throws {
+        var authority = UsageLimitsPublicationAuthority()
+        let current = try decodeResponse(overrides: [
+            "kimi": ["configured": true, "primary_window": ["used_percent": 30]],
+        ])
+        let incoming = try decodeResponse(overrides: [
+            "devin": ["configured": true, "primary_window": ["used_percent": 40]],
+            "kimi": ["configured": true, "error": "offline"],
+        ])
+        let ticket = authority.beginRequest()
+        let result = authority.publish(ticket: ticket, incoming: incoming,
+                                       devinSelected: false, current: current)
+        XCTAssertEqual(result?.kimi, current.kimi)
+        XCTAssertNil(result?.devin?.primaryWindow)
+    }
+
+    func testDisablingOnlyGoodProviderRemovesItsPersistedQuota() throws {
+        let suite = "DevinCacheTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let response = try decodeResponse(overrides: [
+            "devin": ["configured": true, "primary_window": ["used_percent": 40]],
+        ])
+        UsageLimitsCache.save(response, defaults: defaults)
+        XCTAssertNotNil(UsageLimitsCache.load(defaults: defaults)?.devin?.primaryWindow)
+        UsageLimitsCache.save(response, defaults: defaults, devinSelected: false)
+        XCTAssertNil(UsageLimitsCache.load(defaults: defaults)?.devin?.primaryWindow)
+    }
+
     // MARK: - Fixtures
 
     private func decodeResponse(overrides: [String: Any] = [:]) throws -> UsageLimitsResponse {

@@ -312,14 +312,15 @@ describe("useUsageLimits Devin opt-in selection", () => {
     expect(result.current.data?.devin).toEqual({ configured: false });
   });
 
-  it("rewrites Devin rows in stale payloads and preloaded state while the switch is off", async () => {
+  it.each([true, false])("rewrites stale Devin payloads while off even with configured=%s", async (configured) => {
     // A cached/pre-disable payload can still carry Devin data; while the
     // selection is off it must publish as not-configured instead.
-    vi.mocked(getUsageLimits).mockResolvedValue(devinLimits);
+    const staleLimits = { ...devinLimits, devin: { ...devinLimits.devin, configured } };
+    vi.mocked(getUsageLimits).mockResolvedValue(staleLimits);
     const { result } = renderHook(() =>
       useUsageLimits({
         initialRefresh: true,
-        initialState: { data: devinLimits },
+        initialState: { data: staleLimits },
         publishToPreloadCache: true,
       }),
     );

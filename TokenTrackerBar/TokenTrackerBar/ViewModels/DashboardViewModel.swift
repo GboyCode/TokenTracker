@@ -112,6 +112,9 @@ class DashboardViewModel: ObservableObject {
         // A cache written while Devin was enabled must not reappear once the
         // user switched it off — strip retained rows before first publish.
         usageLimits = UsageLimitsCache.load()?.applyingDevinSelection(selected)
+        if let usageLimits, !selected {
+            UsageLimitsCache.save(usageLimits, devinSelected: false)
+        }
         NotificationCenter.default.publisher(for: .nativeSettingsChanged)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.handleDevinSelectionChanged() }
@@ -947,7 +950,7 @@ class DashboardViewModel: ObservableObject {
             let adjusted = current.applyingDevinSelection(selected)
             if adjusted != current {
                 usageLimits = adjusted
-                UsageLimitsCache.save(adjusted)
+                UsageLimitsCache.save(adjusted, devinSelected: selected)
             }
         }
         Task { await refreshUsageLimits() }
@@ -976,7 +979,7 @@ class DashboardViewModel: ObservableObject {
                 current: self.usageLimits
             ) else { return }
             self.usageLimits = published
-            UsageLimitsCache.save(published)
+            UsageLimitsCache.save(published, devinSelected: LimitsSettingsStore.shared.isVisible("devin"))
             self.detectLimitResets(in: self.usageLimits)
         } catch {
             // Non-fatal: usage limits are best-effort, don't replace the last good record.
