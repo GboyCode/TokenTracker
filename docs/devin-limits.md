@@ -22,6 +22,8 @@ Request contract (verified against the installed Devin CLI and the generated cli
 - `GetUserStatus` is intentionally not used: it returns the same plan status plus identity fields this provider does not need.
 - A non-default `api_server_url` in the credentials file is treated as an unsupported configuration, not as an alternate request destination.
 
+This is an internal, unversioned RPC rather than a public API guarantee, so upstream contract changes may require provider updates.
+
 ## Configuration
 
 The provider is keyed entirely by the Devin CLI's saved sign-in:
