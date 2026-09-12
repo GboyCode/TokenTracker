@@ -44,6 +44,7 @@ const existingLimits = {
   qoder: { configured: false },
   codingPlan: { configured: false },
   agentPlan: { configured: false },
+  devin: { configured: false },
 };
 
 const freshLimits = {

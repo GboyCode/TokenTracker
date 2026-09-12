@@ -879,4 +879,105 @@ describe("UsageLimitsPanel", () => {
     expect(screen.queryByText("Auto-renew")).not.toBeInTheDocument();
     expect(screen.queryByText("Subscription")).not.toBeInTheDocument();
   });
+
+  it("renders Devin Daily / Weekly windows with the plan label", () => {
+    render(
+      <UsageLimitsPanel
+        devin={{
+          configured: true,
+          error: null,
+          plan_label: "Pro",
+          primary_window: {
+            used_percent: 40,
+            reset_at: "2026-09-13T08:00:00.000Z",
+            limit_window_seconds: 86400,
+          },
+          secondary_window: {
+            used_percent: 90,
+            reset_at: "2026-09-20T08:00:00.000Z",
+            limit_window_seconds: 604800,
+          },
+        }}
+        order={["devin"]}
+      />,
+    );
+
+    expect(screen.getByText("Devin Pro")).toBeInTheDocument();
+    expect(screen.getByText("Daily")).toBeInTheDocument();
+    expect(screen.getByText("Weekly")).toBeInTheDocument();
+    expect(screen.getByText("40%")).toBeInTheDocument();
+    expect(screen.getByText("90%")).toBeInTheDocument();
+  });
+
+  it("flips Devin percentages to remaining in remaining display mode", () => {
+    render(
+      <UsageLimitsPanel
+        devin={{
+          configured: true,
+          error: null,
+          primary_window: {
+            used_percent: 40,
+            reset_at: "2026-09-13T08:00:00.000Z",
+            limit_window_seconds: 86400,
+          },
+        }}
+        order={["devin"]}
+        displayMode="remaining"
+      />,
+    );
+
+    expect(screen.getByText("60%")).toBeInTheDocument();
+    expect(screen.queryByText("40%")).not.toBeInTheDocument();
+  });
+
+  it("renders no bogus Daily bar when Devin reports only the weekly window", () => {
+    render(
+      <UsageLimitsPanel
+        devin={{
+          configured: true,
+          error: null,
+          primary_window: null,
+          secondary_window: {
+            used_percent: 25,
+            reset_at: "2026-09-20T08:00:00.000Z",
+            limit_window_seconds: 604800,
+          },
+        }}
+        order={["devin"]}
+      />,
+    );
+
+    expect(screen.getByText("Devin")).toBeInTheDocument();
+    expect(screen.getByText("Weekly")).toBeInTheDocument();
+    expect(screen.getByText("25%")).toBeInTheDocument();
+    expect(screen.queryByText("Daily")).not.toBeInTheDocument();
+  });
+
+  it("shows the Devin CLI setup hint when not connected", () => {
+    render(
+      <UsageLimitsPanel devin={{ configured: false }} order={["devin"]} />,
+    );
+
+    expect(screen.getByText("Devin")).toBeInTheDocument();
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByText("Connect Devin")).toBeInTheDocument();
+    expect(screen.getByText("devin auth login")).toBeInTheDocument();
+  });
+
+  it("copies the Devin sign-in snippet", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+
+    render(
+      <UsageLimitsPanel devin={{ configured: false }} order={["devin"]} />,
+    );
+
+    await fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledTimes(1);
+    });
+    expect(writeText.mock.calls[0][0]).toContain("devin auth login");
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
 });

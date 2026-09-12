@@ -94,7 +94,7 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 - 📊 **Schönes Dashboard** — Nutzungstrends, Kostenaufschlüsselung nach Modell, GitHub-ähnliche Aktivitäts-Heatmap, Projektzuordnung
 - 🖥️ **Native Desktop-App** — macOS Menüleiste (+ Widgets) und Windows System Tray, jeweils mit eingebautem Server und Dashboard in einer nativen WebView
 - 🎨 **4 Desktop-Widgets** — Nutzung / Aktivitäts-Heatmap / Top-Modelle / Nutzungslimits auf dem Schreibtisch
-- 📈 **Echtzeit-Nutzungslimits** — Limits für Claude / Codex / Cursor / Gemini / Kimi / Kiro / Grok / Copilot / Antigravity / ZCode / OpenCode Go / Qoder / Qoder CN / Command Code; ein Last-Good-Cache bleibt erhalten, wenn eine lokale Provider-App vorübergehend beendet wird
+- 📈 **Echtzeit-Nutzungslimits** — Limits für Claude / Codex / Cursor / Gemini / Kimi / Kiro / Grok / Copilot / Antigravity / ZCode / OpenCode Go / Qoder / Qoder CN / Command Code / Ark Coding Plan / Ark Agent Plan / Devin; ein Last-Good-Cache bleibt erhalten, wenn eine lokale Provider-App vorübergehend beendet wird
 - 🟢 **Service-Statusseite** — Live-Betriebs- und Störungsstatus von 8 offiziellen Provider-Statusseiten
 - 💰 **Kosten-Engine** — 2.200+ Modelle bepreist via [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) (täglich aktualisiert) + kuratierte Overrides für Nischen-Tools; 24h-Disk-Cache + Offline-Snapshot für genaue USD-Angaben ohne Internetverbindung. Modelle ohne veröffentlichte Preise (z. B. Tencent hy3-preview) werden nach Token erfasst, zeigen aber 0 $ Kosten bis der Anbieter einen Preis veröffentlicht.
 - 🌐 **Optionales Leaderboard** — Vergleiche dich mit Entwicklern weltweit; Spalten per Drag-and-Drop neu anordnen (Opt-in, Anmeldung erforderlich)
@@ -225,7 +225,7 @@ Fehlt dein Tool? [Erstelle ein Issue](https://github.com/xiufengsun/TokenTracker
 | **Local-First-Analyse** | ✅ | ✅ | ✅ |
 | **Native Desktop-Apps** | ✅ macOS, Windows, Linux | ❌ | ❌ |
 | **Desktop-Widgets** | ✅ 4 Widgets | ❌ | ❌ |
-| **Rate-Limit-Tracking** | ✅ 14 Provider | Eingeschränkt (Claude-Blocks) | Mehrere Provider |
+| **Rate-Limit-Tracking** | ✅ 17 Provider | Eingeschränkt (Claude-Blocks) | Mehrere Provider |
 | **Terminal-Analytics** | Basis-CLI (`status`, `--json`) | Starkes CLI-Reporting | Umfangreiche interaktive TUI & CLI |
 | **JSON-Export** | ✅ | ✅ | ✅ |
 | **Öffentliches Leaderboard** | Optional (Opt-in) | ❌ | Optional (`submit`) |

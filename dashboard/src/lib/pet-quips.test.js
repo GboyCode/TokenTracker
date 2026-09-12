@@ -90,6 +90,29 @@ describe("desktop pet limit dialogue", () => {
     }
   });
 
+  it("surfaces Devin daily/weekly windows with localized labels", () => {
+    const prevLocale = getCopyLocale();
+    try {
+      setCopyLocale(ZH_CN_LOCALE);
+      const limits = {
+        devin: {
+          configured: true,
+          error: null,
+          primary_window: { used_percent: 60, reset_at: "2099-01-01T00:00:00Z" },
+          secondary_window: { used_percent: 10, reset_at: "2099-01-02T00:00:00Z" },
+        },
+      };
+
+      const readings = buildPetLimitSummaries(limits);
+      expect(readings.map(({ provider, window }) => `${provider} ${window}`)).toEqual([
+        "Devin 每日",
+        "Devin 每周",
+      ]);
+    } finally {
+      setCopyLocale(prevLocale);
+    }
+  });
+
   it("adds the limit line to the tap conversation without replacing token quips", () => {
     const pool = buildQuipPool("en", {
       tokens: 1200,

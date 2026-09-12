@@ -156,6 +156,10 @@ struct UsageLimitsView: View {
                 if let agentPlan = limits.agentPlan, agentPlan.configured, agentPlan.error == nil {
                     groups.append(AnyView(toolSection(id: id, title: planTitle("Ark Agent Plan", agentPlan.planLabel), assetName: "VolcanoArkLogo", toolName: "Ark Agent Plan", specs: agentPlanSpecs(agentPlan), updatedAtISO: agentPlan.cachedAt, isStale: agentPlan.stale ?? false)))
                 }
+            case "devin":
+                if let devin = limits.devin, devin.configured, devin.error == nil {
+                    groups.append(AnyView(toolSection(id: id, title: planTitle("Devin", devin.planLabel), assetName: "DevinLogo", toolName: "Devin", specs: devinSpecs(devin), updatedAtISO: devin.cachedAt, isStale: devin.stale ?? false)))
+                }
             default:
                 break
             }
@@ -439,6 +443,13 @@ struct UsageLimitsView: View {
         var s: [LimitWindowSpec] = []
         if let w = c.primaryWindow { s.append(makeSpec("5h", w.usedPercent, windowSeconds: 5 * 3600, iso: w.resetAt)) }
         if let w = c.secondaryWindow { s.append(makeSpec("Weekly", w.usedPercent, windowSeconds: 7 * 86400, iso: w.resetAt)) }
+        return s
+    }
+
+    private func devinSpecs(_ d: DevinLimits) -> [LimitWindowSpec] {
+        var s: [LimitWindowSpec] = []
+        if let w = d.primaryWindow { s.append(makeSpec("Daily", w.usedPercent, windowSeconds: w.limitWindowSeconds ?? 86400, iso: w.resetAt)) }
+        if let w = d.secondaryWindow { s.append(makeSpec("Weekly", w.usedPercent, windowSeconds: w.limitWindowSeconds ?? 7 * 86400, iso: w.resetAt)) }
         return s
     }
 
@@ -729,7 +740,7 @@ struct UsageLimitsView: View {
     @ViewBuilder
     private func brandIcon(_ name: String) -> some View {
         switch name {
-        case "CursorLogo", "KimiLogo", "KiroLogo", "GrokLogo", "CopilotLogo", "ZcodeLogo", "OpenCodeLogo", "CommandCodeLogo", "QoderLogo", "QoderCnLogo", "VolcanoArkLogo":
+        case "CursorLogo", "KimiLogo", "KiroLogo", "GrokLogo", "CopilotLogo", "ZcodeLogo", "OpenCodeLogo", "CommandCodeLogo", "QoderLogo", "QoderCnLogo", "VolcanoArkLogo", "DevinLogo":
             let filename: String = {
                 switch name {
                 case "CursorLogo": return "cursor.svg"
@@ -742,6 +753,7 @@ struct UsageLimitsView: View {
                 case "QoderLogo": return "qoder.svg"
                 case "QoderCnLogo": return "qoder-cn.svg"
                 case "VolcanoArkLogo": return "volcano-ark.svg"
+                case "DevinLogo": return "devin.svg"
                 default: return "copilot.svg"
                 }
             }()

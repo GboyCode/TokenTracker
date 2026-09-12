@@ -53,7 +53,7 @@ To erase everything TokenTracker knows about you, delete that directory. `tokent
 |---|---|---|---|
 | **Anonymous heartbeat** | `srctyff5.us-east.insforge.app` | A one-way hash of the machine id, plus the app version, OS platform, and app shell (`cli` / `macos` / `windows` / `linux`) as separate plain fields. Nothing else. | At most once per day |
 | **Dashboard analytics** | `us.i.posthog.com` (PostHog) | Pageviews and explicitly instrumented feature events, plus which shell you use. Autocapture and session recording are **off**; browser Do-Not-Track is respected. | While the dashboard is open |
-| **Provider quota reads** | The provider's own API (`api.anthropic.com`, `chatgpt.com`, `cursor.com`, `api.github.com`, `api.kimi.com`, `api.z.ai`, `qoder.com`, `qoder.com.cn`, `openapi.qoder.sh`, `openapi.qoder.com.cn`, `cloudcode-pa.googleapis.com`, …) | Whatever that provider's own endpoint requires, authenticated with the credentials **that provider already stored on your machine**. These requests go directly from your machine to the provider — they never pass through our servers, and we never see the response. | While quota bars are visible |
+| **Provider quota reads** | The provider's own API (`api.anthropic.com`, `chatgpt.com`, `cursor.com`, `api.github.com`, `api.kimi.com`, `api.z.ai`, `qoder.com`, `qoder.com.cn`, `openapi.qoder.sh`, `openapi.qoder.com.cn`, `cloudcode-pa.googleapis.com`, `server.codeium.com`, …) | Whatever that provider's own endpoint requires, authenticated with the credentials **that provider already stored on your machine**. These requests go directly from your machine to the provider — they never pass through our servers, and we never see the response. | While quota bars are visible |
 | **TRAE Work CN usage read** | TRAE's internal API | Transmits the existing sign-in authorization from the locally signed-in TRAE Work CN app to TRAE; reads usage metadata only. TokenTracker never persists or logs the auth token or prompt/response content. | Off unless you set `TOKENTRACKER_TRAE_CN_USAGE=1`; then during eligible non-background sync when local TRAE Work CN auth exists |
 | **GitHub star count** | `api.github.com` | Nothing but the request itself (public repo metadata) | On dashboard load |
 | **Update check** | `api.github.com` | Nothing but the request itself | Windows: once at launch. macOS: only when you click "Check for Updates" |
@@ -121,7 +121,7 @@ Signing in is **entirely optional**. TokenTracker is fully functional without an
 | GitHub | Source hosting, releases, OAuth, star counts, upstream pricing data (`raw.githubusercontent.com`) | [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement) |
 | Google | OAuth sign-in, fonts on share cards | [policies.google.com/privacy](https://policies.google.com/privacy) |
 
-AI providers whose quota endpoints TokenTracker reads (Anthropic, OpenAI, Cursor, GitHub Copilot, Google, Moonshot, Z.ai, Qoder, …) are governed by their own policies. TokenTracker acts on your behalf with credentials already on your machine; it does not create any new relationship with them.
+AI providers whose quota endpoints TokenTracker reads (Anthropic, OpenAI, Cursor, GitHub Copilot, Google, Moonshot, Z.ai, Qoder, Devin, …) are governed by their own policies. TokenTracker acts on your behalf with credentials already on your machine; it does not create any new relationship with them.
 
 ---
 

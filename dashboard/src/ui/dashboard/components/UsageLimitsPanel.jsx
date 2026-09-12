@@ -29,6 +29,12 @@ function commandCodeLoginSnippet() {
     : copy("limits.commandCode.setupHint.snippet_login");
 }
 
+// `devin auth login` is registry-owned (limits.devin.setupHint.snippet_login)
+// so the setup guide and the reauth tooltip share one source of truth.
+function devinLoginSnippet() {
+  return copy("limits.devin.setupHint.snippet_login");
+}
+
 function formatReset(isoOrUnix) {
   const ts = resetToMs(isoOrUnix);
   if (!Number.isFinite(ts)) return null;
@@ -662,6 +668,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
         {id === "commandCode" ? <CommandCodeSetupHint /> : null}
         {id === "codingPlan" ? <ArkCodingPlanSetupHint /> : null}
         {id === "agentPlan" ? <ArkAgentPlanSetupHint /> : null}
+        {id === "devin" ? <DevinSetupHint /> : null}
       </>,
       expanded,
       onToggle,
@@ -693,6 +700,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
         {id === "commandCode" ? <CommandCodeSetupHint /> : null}
         {id === "codingPlan" ? <ArkCodingPlanSetupHint /> : null}
         {id === "agentPlan" ? <ArkAgentPlanSetupHint /> : null}
+        {id === "devin" ? <DevinSetupHint /> : null}
       </>,
       expanded,
       onToggle,
@@ -712,7 +720,9 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
     const command =
       id === "commandCode"
         ? commandCodeLoginSnippet()
-        : REAUTH_CLI_COMMANDS[id];
+        : id === "devin"
+          ? devinLoginSnippet()
+          : REAUTH_CLI_COMMANDS[id];
     badge = (
       <StatusBadge
         label={copy("limits.reauth.badge")}
@@ -965,6 +975,60 @@ function CommandCodeSetupHint() {
   );
 }
 
+// Devin quota is read through the Devin CLI's saved sign-in on this machine
+// — the backend reuses the session token the CLI wrote to its credentials
+// file, so all the row needs is the CLI installed and signed in once.
+// TokenTracker only ever sends that token to Devin's official quota endpoint.
+function DevinSetupHint() {
+  const [copied, setCopied] = useState(false);
+  const loginSnippet = devinLoginSnippet();
+
+  const onCopy = async (e) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(loginSnippet);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch (_e) {
+      // Clipboard can be unavailable in embedded or restricted contexts.
+    }
+  };
+
+  return (
+    <div className="mt-1.5 rounded-lg border border-oai-gray-200 dark:border-oai-gray-700/60 bg-oai-gray-50/50 dark:bg-oai-gray-900/20 p-3 text-[11px] text-oai-gray-600 dark:text-oai-gray-300">
+      <div className="text-[12px] font-semibold text-oai-gray-800 dark:text-oai-gray-100">
+        {copy("limits.devin.setupHint.title")}
+      </div>
+      <div className="mt-0.5 leading-snug text-oai-gray-500 dark:text-oai-gray-400">
+        {copy("limits.devin.setupHint.subtitle")}
+      </div>
+
+      <ol className="mt-2.5 space-y-2.5">
+        <HintStep n="1">
+          <div>{copy("limits.devin.setupHint.step1")}</div>
+          <pre className="mt-1.5 overflow-x-auto rounded-md bg-oai-gray-100 dark:bg-oai-gray-900/60 px-2 py-1.5 font-mono text-[10.5px] leading-relaxed whitespace-pre">
+            {loginSnippet}
+          </pre>
+          <div className="mt-1.5 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onCopy}
+              className="shrink-0 rounded-md border border-oai-gray-300 dark:border-oai-gray-700 px-2 py-0.5 text-[10.5px] text-oai-gray-700 dark:text-oai-gray-200 hover:bg-oai-gray-100 dark:hover:bg-oai-gray-800 transition-colors"
+            >
+              {copied
+                ? copy("limits.devin.setupHint.copied")
+                : copy("limits.devin.setupHint.copy")}
+            </button>
+          </div>
+          <div className="mt-1 text-[10px] text-oai-gray-400 dark:text-oai-gray-500">
+            {copy("limits.devin.setupHint.note")}
+          </div>
+        </HintStep>
+      </ol>
+    </div>
+  );
+}
+
 // Ark Coding Plan (火山方舟) quota comes from the official Ark CLI (arkcli)
 // running on this machine — there is no public quota endpoint, so the CLI is
 // feature-detected at fetch time. When it is missing (or not signed in) the
@@ -1128,8 +1192,8 @@ function useWidestLabelWidth(containerRef) {
   return labelWidth;
 }
 
-export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, order, visibility, displayMode, subscriptions = [], showSubscriptions = true }) {
-  const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan };
+export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, order, visibility, displayMode, subscriptions = [], showSubscriptions = true }) {
+  const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin };
   const containerRef = useRef(null);
   const labelWidth = useWidestLabelWidth(containerRef);
   const [expandedId, setExpandedId] = useState(null);

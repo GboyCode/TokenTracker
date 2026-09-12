@@ -18,10 +18,11 @@ struct UsageLimitsResponse: Codable, Equatable {
     let qoderCn: QoderLimits?
     let codingPlan: CodingPlanLimits?
     let agentPlan: AgentPlanLimits?
+    let devin: DevinLimits?
 
     enum CodingKeys: String, CodingKey {
         case fetchedAt = "fetched_at"
-        case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan
+        case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin
         case opencodeGo = "opencodeGo"
         case commandCode = "commandCode"
     }
@@ -111,6 +112,10 @@ extension UsageLimitsResponse {
             return guarded(qoder?.configured, qoder?.error, qoder?.primaryWindow?.usedPercent)
         case .qoderUltimate:
             return guarded(qoder?.configured, qoder?.error, qoder?.secondaryWindow?.usedPercent)
+        case .devinDaily:
+            return guarded(devin?.configured, devin?.error, devin?.primaryWindow?.usedPercent)
+        case .devinWeekly:
+            return guarded(devin?.configured, devin?.error, devin?.secondaryWindow?.usedPercent)
         }
     }
 }
@@ -575,6 +580,29 @@ struct CodingPlanLimits: Codable, Equatable {
 
 typealias AgentPlanLimits = CodingPlanLimits
 
+/// Devin (devin.ai): daily + weekly subscription quota read from the official
+/// GetPlanStatus RPC by the local server, keyed by the Devin CLI's saved
+/// sign-in. Mirror of CommandCodeLimits minus the subscription status.
+struct DevinLimits: Codable, Equatable {
+    let configured: Bool
+    let error: String?
+    let planLabel: String?
+    let primaryWindow: GenericLimitWindow?
+    let secondaryWindow: GenericLimitWindow?
+    let cachedAt: String?
+    let stale: Bool?
+    let authActionRequired: String?
+
+    enum CodingKeys: String, CodingKey {
+        case configured, error, stale
+        case planLabel = "plan_label"
+        case primaryWindow = "primary_window"
+        case secondaryWindow = "secondary_window"
+        case cachedAt = "cached_at"
+        case authActionRequired = "auth_action_required"
+    }
+}
+
 struct AntigravityLimits: Codable, Equatable {
     let configured: Bool
     let error: String?
@@ -621,6 +649,7 @@ extension UsageLimitsResponse {
             (qoderCn?.configured ?? false, qoderCn?.error),
             (codingPlan?.configured ?? false, codingPlan?.error),
             (agentPlan?.configured ?? false, agentPlan?.error),
+            (devin?.configured ?? false, devin?.error),
         ]
         return providers.contains { $0.0 && $0.1 == nil }
     }

@@ -31,6 +31,7 @@ const { fetchGrokLimits } = require("./grok-limits");
 const { fetchZcodeLimits } = require("./zcode-limits");
 const { fetchOpencodeGoLimits } = require("./opencode-go-limits");
 const { fetchCommandcodeLimits } = require("./commandcode-limits");
+const { fetchDevinLimits } = require("./devin-limits");
 const { fetchQoderLimits, fetchQoderCnLimits } = require("./qoder-limits");
 const { fetchArkCodingPlanLimits } = require("./ark-coding-plan-limits");
 const { fetchArkAgentPlanLimits } = require("./ark-agent-plan-limits");
@@ -3810,7 +3811,7 @@ async function fetchUsageLimitsUncached({
     : null;
 
   const providerFetch = withFetchTimeout(fetchImpl, providerTimeoutMs);
-  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, claudeServiceStatus] = await Promise.all([
+  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, claudeServiceStatus] = await Promise.all([
     claudeToken && !freshClaudeCache && !claudeRetryAtMs
       ? withProviderTimeout(fetchClaudeUsageLimits(claudeToken, { fetchImpl: providerFetch, maxAttempts: 1 }), "Claude", providerTimeoutMs).then(
           (value) => ({ status: "fulfilled", value }),
@@ -3920,6 +3921,16 @@ async function fetchUsageLimitsUncached({
     // timeouts (whoami, then credits+subscriptions) could hold the aggregate
     // ~2x longer than any sibling provider.
     withProviderTimeout(fetchCommandcodeLimits({ home, env, fetchImpl: providerFetch }), "CommandCode", providerTimeoutMs)
+      .then(
+        (value) => ({ status: "fulfilled", value }),
+        (reason) => ({ status: "rejected", reason }),
+      ),
+    // Devin (devin.ai): daily/weekly subscription quota from the official
+    // GetPlanStatus RPC, keyed by the session token the Devin CLI stores in
+    // ~/.local/share/devin/credentials.toml. No local fallback — window state
+    // lives server-side. fetchDevinLimits throws on auth expiry so the
+    // assemble step below can flag auth_action_required.
+    withProviderTimeout(fetchDevinLimits({ home, env, fetchImpl: providerFetch }), "Devin", providerTimeoutMs)
       .then(
         (value) => ({ status: "fulfilled", value }),
         (reason) => ({ status: "rejected", reason }),
@@ -4134,6 +4145,22 @@ async function fetchUsageLimitsUncached({
       : { configured: true, error: reason?.message || "Unknown error" };
   }
 
+  // Devin: server-owned quota windows like CommandCode — a fulfilled
+  // `configured: false` means no CLI credentials; a rejected fetch with
+  // AUTH_EXPIRED flags auth_action_required for the re-sign-in hint.
+  let devinObj;
+  if (devinRaw?.status === "fulfilled") {
+    const value = devinRaw.value;
+    devinObj = value && value.configured === false
+      ? value
+      : { ...value, stale: false, cached_at: new Date(nowMs).toISOString() };
+  } else {
+    const reason = devinRaw?.reason || null;
+    devinObj = reason?.code === "AUTH_EXPIRED"
+      ? { configured: true, error: reason?.message || "Unknown error", auth_action_required: "reauth" }
+      : { configured: true, error: reason?.message || "Unknown error" };
+  }
+
   const data = {
     fetched_at: new Date(nowMs).toISOString(),
     claude: withPlanLabel(claude, claudePlanType, "Claude"),
@@ -4155,6 +4182,9 @@ async function fetchUsageLimitsUncached({
     // maps plan ids to the CLI's exact display strings, so skip the shared
     // Title-Case normalization ("Goat") and surface them as-is.
     commandCode: commandCodeObj,
+    // Devin's planName ("Pro", "Max") is already the official display name —
+    // Title-Case normalization is still harmless and strips any brand prefix.
+    devin: withPlanLabel(devinObj, devinObj?.plan_label, "Devin"),
     qoder: withPlanLabel(qoder, qoder?.plan_label, "Qoder"),
     qoderCn: withPlanLabel(qoderCn, qoderCn?.plan_label, "Qoder CN"),
     codingPlan: withPlanLabel(codingPlan, codingPlan?.plan_label, "Ark Coding Plan"),
@@ -4226,6 +4256,7 @@ module.exports = {
   fetchZcodeLimits,
   fetchOpencodeGoLimits,
   fetchCommandcodeLimits,
+  fetchDevinLimits,
   fetchQoderLimits,
   fetchQoderCnLimits,
 };

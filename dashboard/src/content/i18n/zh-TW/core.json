@@ -735,5 +735,15 @@
   "limits.commandCode.setupHint.snippet_login_windows": "cmdc auth login",
   "limits.commandCode.setupHint.snippet_env_windows": "$token = Read-Host -AsSecureString\\n$env:COMMAND_CODE_API_KEY = [System.Net.NetworkCredential]::new('', $token).Password\\n[Environment]::SetEnvironmentVariable('COMMAND_CODE_API_KEY', $env:COMMAND_CODE_API_KEY, 'User')",
   "limits.commandCode.setupHint.note_windows": "Windows：在 PowerShell 中執行，然後重新啟動 TokenTracker。",
-  "limits.commandCode.setupHint.note_linux": "Linux：從目前終端啟動 TokenTracker，以讀取環境變數。"
+  "limits.commandCode.setupHint.note_linux": "Linux：從目前終端啟動 TokenTracker，以讀取環境變數。",
+  "limits.provider.devin": "Devin",
+  "limits.label.devin_daily": "每日",
+  "limits.label.devin_weekly": "每週",
+  "limits.devin.setupHint.title": "連接 Devin",
+  "limits.devin.setupHint.subtitle": "使用本機 Devin CLI 儲存的登入讀取你的 Devin 訂閱額度。",
+  "limits.devin.setupHint.step1": "安裝 Devin CLI 並執行下方命令登入，TokenTracker 自動沿用登入，無需重新啟動。",
+  "limits.devin.setupHint.copy": "複製",
+  "limits.devin.setupHint.copied": "已複製",
+  "limits.devin.setupHint.note": "登入後重新整理此頁即可。TokenTracker 只會將儲存的工作階段權杖傳送到 Devin 官方額度端點。",
+  "limits.devin.setupHint.snippet_login": "devin auth login   # 登入 Devin"
 }

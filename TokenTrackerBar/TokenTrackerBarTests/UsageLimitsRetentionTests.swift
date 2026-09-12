@@ -113,6 +113,14 @@ final class UsageLimitsRetentionTests: XCTestCase {
         XCTAssertFalse(response.hasAnyProviderWithoutError)
     }
 
+    func testDevinCountsWhenUsable() throws {
+        let response = try decodeResponse(overrides: [
+            "devin": ["configured": true],
+        ])
+
+        XCTAssertTrue(response.hasAnyProviderWithoutError)
+    }
+
     // MARK: - displayRecord retention rule
 
     func testDisplayRecordAdoptsIncomingWhenNoCurrentRecord() throws {

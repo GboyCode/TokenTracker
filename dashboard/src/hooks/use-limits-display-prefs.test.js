@@ -118,6 +118,7 @@ describe("useLimitsDisplayPrefs", () => {
         "commandCode",
         "copilot",
         "cursor",
+        "devin",
         "gemini",
         "grok",
         "kimi",
