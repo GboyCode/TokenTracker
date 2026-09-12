@@ -2407,6 +2407,7 @@ async function cmdSync(argv, context = {}) {
           sessionFiles: piFiles,
           cursors,
           queuePath,
+          projectQueuePath,
           env: process.env,
           onProgress: (p) => {
             if (!progress?.enabled) return;
