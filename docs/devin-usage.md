@@ -12,14 +12,15 @@ Set `TOKENTRACKER_DEVIN_DB` to point at a different database file.
 
 On Windows there is no known native Devin data directory; a Devin install inside WSL is discovered through the `\\wsl$` bridge like other WSL-resident tools.
 
-The reader projects only statistical metadata from `message_nodes.chat_message` — `role`, `message_id`, `metadata.request_id`, `metadata.generation_model`, `metadata.started_generation_at` / `metadata.created_at`, and the scalar `metadata.metrics.*_tokens` counters — joined with `sessions.working_directory` for local project attribution. The full JSON is parsed in memory; only those fields are used.
+The reader runs a narrow SQL projection over `message_nodes`: `role = 'assistant'` is a `WHERE` filter, and SQLite's `json_extract` pulls only `metadata.request_id`, `metadata.generation_model`, `metadata.started_generation_at` / `metadata.created_at`, and the scalar `metadata.metrics.*_tokens` counters out of `chat_message`, joined with `sessions.working_directory` for local project attribution. Only those projected scalars enter Node memory — the application never loads whole message documents.
 
 ## Deduplication and corrections
 
 `request_id` is the billing identity, not the message node. Devin's retained history contains replay, fork, and compaction copies of the same request, so TokenTracker keeps a per-request ledger under `cursors.devin.requests` in `tracker/cursors.json`:
 
-- The first copy of a request contributes its usage once; later copies of the same `request_id` are ignored.
-- If a retained record's metrics are corrected in place, the previous contribution is subtracted and the corrected one applied — no double-add, no frozen stale value.
+- The first observed copy of a request contributes its usage once; its owning session, resolved project, and conversation share are recorded in the ledger at that point and stay authoritative for the request's lifetime. Later copies of the same `request_id` — in the same session or in a fork — never add usage and never re-home the recorded attribution, even if the original node is deleted or compacted away while a copy survives.
+- A fork made only of copied requests contributes no usage and no conversation of its own; the first genuinely new request in a session pays that session's single `conversation_count` once.
+- If a retained record's metrics are corrected, the previous contribution is subtracted and the corrected one applied — model and hour buckets may move, but the contribution stays with the request's recorded owning session and project.
 - Deleting or compacting a conversation does **not** refund tokens already consumed.
 - Buckets use `metadata.started_generation_at` (falling back to `metadata.created_at`), never node insertion time, and the recorded `generation_model` — including `compactor` — is preserved rather than rewritten to the session's configured model.
 

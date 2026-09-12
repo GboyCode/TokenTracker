@@ -765,6 +765,289 @@ sqliteTest("Devin picks up WAL-only writes and survives database replacement", a
   }
 });
 
+sqliteTest("Devin retains owning session/project/conversation when the original copy is deleted", async () => {
+  const { dir, dbPath } = createDevinDb();
+  try {
+    const repoA = makeGitRepo(path.join(dir, "repo-a"));
+    const repoB = makeGitRepo(path.join(dir, "repo-b"), "https://github.com/acme/other.git");
+    insertSession(dbPath, { id: "original", workingDirectory: repoA, createdAt: 1783600000 });
+    insertSession(dbPath, { id: "fork", workingDirectory: repoB, createdAt: 1783600100 });
+    const copied = devinAssistantMessage({
+      requestId: "old-request",
+      startedAt: "2026-07-09T18:00:00Z",
+      input: 50,
+      output: 5,
+    });
+    insertNode(dbPath, { rowId: 1, sessionId: "original", nodeId: 1, chatMessage: copied, createdAt: 1783600200 });
+    insertNode(dbPath, { rowId: 2, sessionId: "fork", nodeId: 1, chatMessage: copied, createdAt: 1783600300 });
+    insertNode(dbPath, {
+      rowId: 3,
+      sessionId: "fork",
+      nodeId: 2,
+      chatMessage: devinAssistantMessage({
+        requestId: "new-fork-request",
+        startedAt: "2026-07-09T18:05:00Z",
+        input: 8,
+        output: 2,
+      }),
+      createdAt: 1783600400,
+    });
+
+    const queuePath = path.join(dir, "queue.jsonl");
+    const projectQueuePath = path.join(dir, "project.queue.jsonl");
+    const cursors = {};
+    const parse = () => parseDevinIncremental({ dbPath, cursors, queuePath, projectQueuePath });
+    const latestProjects = () => {
+      const out = new Map();
+      for (const row of readQueue(projectQueuePath)) {
+        out.set(`${row.project_key}|${row.source}|${row.hour_start}`, row);
+      }
+      return [...out.values()].map((row) => [row.project_key, row.total_tokens]);
+    };
+    const conversationTotal = () =>
+      [...latestBuckets(queuePath).values()].reduce((sum, row) => sum + (row.conversation_count || 0), 0);
+
+    await parse();
+    assert.deepEqual(Object.fromEntries(latestProjects()), {
+      "acme/widgets": 55,
+      "acme/other": 10,
+    });
+    assert.equal(conversationTotal(), 2, "two sessions produced original usage");
+
+    // Delete only the original copy; the fork copy of old-request survives.
+    executeSql(dbPath, "DELETE FROM message_nodes WHERE row_id = 1");
+    const second = await parse();
+    assert.equal(second.eventsAggregated, 0, "no new usage — only a copy deletion");
+    assert.deepEqual(Object.fromEntries(latestProjects()), {
+      "acme/widgets": 55,
+      "acme/other": 10,
+    }, "historical project ownership must not migrate to the fork");
+    assert.equal(conversationTotal(), 2, "the original session's conversation is not refunded");
+
+    // Re-parse idempotence: deleting more copies changes nothing.
+    const third = await parse();
+    assert.deepEqual(third, {
+      recordsProcessed: 0,
+      eventsAggregated: 0,
+      bucketsQueued: 0,
+      projectBucketsQueued: 0,
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+sqliteTest("Devin counts a fork's own later usage once even after the copied request vanishes", async () => {
+  const { dir, dbPath } = createDevinDb();
+  try {
+    insertSession(dbPath, { id: "s1", workingDirectory: null, createdAt: 1783600000 });
+    insertNode(dbPath, {
+      rowId: 1,
+      sessionId: "s1",
+      nodeId: 1,
+      chatMessage: devinAssistantMessage({
+        requestId: "req-A",
+        startedAt: "2026-07-09T10:00:00.000Z",
+        input: 100,
+        output: 10,
+      }),
+      createdAt: 1783600100,
+    });
+
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursors = {};
+    const conversationTotal = () =>
+      [...latestBuckets(queuePath).values()].reduce((sum, row) => sum + (row.conversation_count || 0), 0);
+    const tokenTotal = () =>
+      [...latestBuckets(queuePath).values()].reduce((sum, row) => sum + (row.total_tokens || 0), 0);
+
+    await parseDevinIncremental({ dbPath, cursors, queuePath });
+    assert.equal(conversationTotal(), 1);
+
+    // s1's node is wiped; a later fork s2 keeps a copy of req-A and adds its
+    // own original request req-C. A fork containing only copies pays no
+    // conversation of its own; its genuinely new request pays exactly one.
+    executeSql(dbPath, "DELETE FROM message_nodes WHERE row_id = 1");
+    insertSession(dbPath, { id: "s2", workingDirectory: null, createdAt: 1783700000 });
+    insertNode(dbPath, {
+      rowId: 2,
+      sessionId: "s2",
+      nodeId: 1,
+      chatMessage: devinAssistantMessage({
+        requestId: "req-A",
+        startedAt: "2026-07-09T10:00:00.000Z",
+        input: 100,
+        output: 10,
+      }),
+      createdAt: 1783700100,
+    });
+    insertNode(dbPath, {
+      rowId: 3,
+      sessionId: "s2",
+      nodeId: 2,
+      chatMessage: devinAssistantMessage({
+        requestId: "req-C",
+        startedAt: "2026-07-09T10:20:00.000Z",
+        input: 30,
+        output: 3,
+      }),
+      createdAt: 1783700200,
+    });
+    await parseDevinIncremental({ dbPath, cursors, queuePath });
+    assert.equal(conversationTotal(), 2, "s1 historical + s2's own request");
+    assert.equal(tokenTotal(), 143);
+
+    // req-A vanishes everywhere. s2 keeps producing original usage and must
+    // stay counted — the marker must not be pinned to the vanished request.
+    executeSql(dbPath, "DELETE FROM message_nodes WHERE row_id = 2");
+    insertNode(dbPath, {
+      rowId: 4,
+      sessionId: "s2",
+      nodeId: 3,
+      chatMessage: devinAssistantMessage({
+        requestId: "req-D",
+        startedAt: "2026-07-09T10:40:00.000Z",
+        input: 7,
+        output: 1,
+      }),
+      createdAt: 1783700300,
+    });
+    await parseDevinIncremental({ dbPath, cursors, queuePath });
+    assert.equal(conversationTotal(), 2);
+    assert.equal(tokenTotal(), 151);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+sqliteTest("Devin correction keeps the retained owning project while moving model and hour", async () => {
+  const { dir, dbPath } = createDevinDb();
+  try {
+    const repoA = makeGitRepo(path.join(dir, "repo-a"));
+    const repoB = makeGitRepo(path.join(dir, "repo-b"), "https://github.com/acme/other.git");
+    insertSession(dbPath, { id: "s1", workingDirectory: repoA, createdAt: 1783600000 });
+    insertSession(dbPath, { id: "s2", workingDirectory: repoB, createdAt: 1783600100 });
+    insertNode(dbPath, {
+      rowId: 1,
+      sessionId: "s1",
+      nodeId: 1,
+      chatMessage: devinAssistantMessage({
+        requestId: "req-M",
+        startedAt: "2026-07-09T12:00:00.000Z",
+        input: 100,
+        output: 10,
+      }),
+      createdAt: 1783600200,
+    });
+    insertNode(dbPath, {
+      rowId: 2,
+      sessionId: "s2",
+      nodeId: 1,
+      chatMessage: devinAssistantMessage({
+        requestId: "req-M",
+        startedAt: "2026-07-09T12:00:00.000Z",
+        input: 100,
+        output: 10,
+      }),
+      createdAt: 1783600300,
+    });
+
+    const queuePath = path.join(dir, "queue.jsonl");
+    const projectQueuePath = path.join(dir, "project.queue.jsonl");
+    const cursors = {};
+    await parseDevinIncremental({ dbPath, cursors, queuePath, projectQueuePath });
+    const projectTotals = () => {
+      const out = new Map();
+      for (const row of readQueue(projectQueuePath)) {
+        out.set(`${row.project_key}|${row.source}|${row.hour_start}`, row);
+      }
+      return out;
+    };
+
+    // In-place correction applied consistently to every retained copy (the
+    // verified writer keeps copies identical): model + hour move. The
+    // contribution reconciles to the new model/bucket but stays with the
+    // originally recorded owning project even though a fork copy survives.
+    const corrected = devinAssistantMessage({
+      requestId: "req-M",
+      model: "compactor",
+      startedAt: "2026-07-09T13:30:00.000Z",
+      input: 200,
+      output: 20,
+    });
+    executeSql(dbPath, `UPDATE message_nodes SET chat_message = ${quote(corrected)} WHERE row_id IN (1, 2)`);
+    const second = await parseDevinIncremental({ dbPath, cursors, queuePath, projectQueuePath });
+    assert.equal(second.eventsAggregated, 1);
+
+    const buckets = latestBuckets(queuePath);
+    assert.equal(buckets.get("devin|swe-2-high|2026-07-09T12:00:00.000Z").total_tokens, 0);
+    assert.equal(buckets.get("devin|compactor|2026-07-09T13:30:00.000Z").total_tokens, 220);
+
+    const projects = projectTotals();
+    const oldProjectRow = projects.get("acme/widgets|devin|2026-07-09T12:00:00.000Z");
+    const newProjectRow = projects.get("acme/widgets|devin|2026-07-09T13:30:00.000Z");
+    assert.equal(oldProjectRow.total_tokens, 0, "old project bucket retracted");
+    assert.equal(newProjectRow.total_tokens, 220, "correction lands on the retained project");
+    assert.equal(projects.get("acme/other|devin|2026-07-09T13:30:00.000Z"), undefined);
+
+    // Then the original copy disappears — only the corrected fork copy
+    // survives. Nothing may move again.
+    executeSql(dbPath, "DELETE FROM message_nodes WHERE row_id = 1");
+    const third = await parseDevinIncremental({ dbPath, cursors, queuePath, projectQueuePath });
+    assert.equal(third.eventsAggregated, 0);
+    assert.equal(projectTotals().get("acme/widgets|devin|2026-07-09T13:30:00.000Z").total_tokens, 220);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+sqliteTest("Devin ledger survives cursor serialization for untrusted request ids", async () => {
+  const { dir, dbPath } = createDevinDb();
+  try {
+    insertSession(dbPath, { id: "s1", workingDirectory: null, createdAt: 1783600000 });
+    insertNode(dbPath, {
+      rowId: 1,
+      sessionId: "s1",
+      nodeId: 1,
+      chatMessage: devinAssistantMessage({
+        requestId: "__proto__",
+        startedAt: "2026-07-09T10:00:00.000Z",
+        input: 100,
+        output: 10,
+      }),
+      createdAt: 1783600100,
+    });
+
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursors = {};
+    await parseDevinIncremental({ dbPath, cursors, queuePath });
+    const tokenTotal = () =>
+      [...latestBuckets(queuePath).values()].reduce((sum, row) => sum + (row.total_tokens || 0), 0);
+    assert.equal(tokenTotal(), 110);
+    assert.deepEqual(Object.keys(cursors.devin.requests), ["__proto__"]);
+
+    // Simulate the next sync process loading cursors.json.
+    const restored = JSON.parse(JSON.stringify(cursors));
+    insertNode(dbPath, {
+      rowId: 2,
+      sessionId: "s1",
+      nodeId: 2,
+      chatMessage: devinAssistantMessage({
+        requestId: "req-normal",
+        startedAt: "2026-07-09T10:10:00.000Z",
+        input: 5,
+        output: 1,
+      }),
+      createdAt: 1783600200,
+    });
+    const second = await parseDevinIncremental({ dbPath, cursors: restored, queuePath });
+    assert.equal(second.eventsAggregated, 1, "only the genuinely new request counts");
+    assert.equal(tokenTotal(), 116, "the __proto__ request must not re-add");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 sqliteTest("Devin handles missing and corrupt databases", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "devin-missing-"));
   try {

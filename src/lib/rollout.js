@@ -12923,6 +12923,13 @@ async function parseAnythingllmIncremental({
 // before adding its current one, and deleted/compacted history keeps its
 // (non-refunded) ledger entry. There is no row_id high-water mark because
 // in-place metric corrections cannot be detected by one.
+//
+// Attribution recorded at first observation is authoritative: a request's
+// owning session, resolved project and conversation share live in the ledger,
+// so deleting the original node while a fork copy survives never migrates its
+// spend or refunds its conversation. A fork made only of copies pays nothing;
+// the first genuinely new request in a session pays its single
+// conversation_count once via cursors.devin.conversations.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DEVIN_SOURCE = "devin";
@@ -12955,6 +12962,19 @@ function devinSqliteFingerprint(dbPath) {
   // content change, so it must not force a rescan (same convention as Unsloth).
   delete fingerprint["-shm"];
   return fingerprint;
+}
+
+// Request ids and conversation keys are untrusted strings — normalize the
+// persisted maps into null-prototype dictionaries so a literal "__proto__"
+// key stays an own entry that round-trips through cursors.json instead of
+// silently mutating the prototype chain (and re-adding that request's usage
+// on every rescan).
+function devinStringMap(value) {
+  const dict = Object.create(null);
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const key of Object.keys(value)) dict[key] = value[key];
+  }
+  return dict;
 }
 
 async function readDevinUsageRows(dbPath, sqliteOptions = {}) {
@@ -13006,19 +13026,13 @@ async function parseDevinIncremental({
   const resolvedDb = dbPath || resolveDevinDbPath(env || process.env);
   const priorState =
     cursors.devin && typeof cursors.devin === "object" ? cursors.devin : {};
-  const requests =
-    priorState.requests && typeof priorState.requests === "object"
-      ? priorState.requests
-      : {};
-  const conversations =
-    priorState.conversations && typeof priorState.conversations === "object"
-      ? priorState.conversations
-      : {};
+  const requests = devinStringMap(priorState.requests);
+  const countedConversations = devinStringMap(priorState.conversations);
   if (!resolvedDb || !fssync.existsSync(resolvedDb)) {
     cursors.devin = {
       ...priorState,
       requests,
-      conversations,
+      conversations: countedConversations,
       updatedAt: new Date().toISOString(),
     };
     return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
@@ -13032,10 +13046,7 @@ async function parseDevinIncremental({
   }
 
   const rows = await readDevinUsageRows(resolvedDb, sqliteOptions);
-  const { events, conversations: nextConversations } = buildDevinUsageEvents(
-    rows,
-    conversations,
-  );
+  const { events } = buildDevinUsageEvents(rows);
 
   const hourlyState = normalizeHourlyState(cursors?.hourly);
   const touchedBuckets = new Set();
@@ -13054,38 +13065,57 @@ async function parseDevinIncremental({
     const bucketStart = toUtcHalfHourStart(new Date(event.tsMs).toISOString());
     if (!bucketStart) continue;
 
-    let projectKey = null;
-    let projectRef = null;
-    if (projectEnabled && event.sessionId) {
-      let context = projectContextBySession.get(event.sessionId);
-      if (context === undefined) {
-        const startDir = event.workingDirectory
-          ? wsl.mapWslCwdToUnc(event.workingDirectory, resolvedDb)
-          : null;
-        context = startDir
-          ? await resolveProjectContextForPath({
-              startDir,
-              projectMetaCache,
-              publicRepoCache,
-              publicRepoResolver,
-              projectState,
-            })
-          : null;
-        projectContextBySession.set(event.sessionId, context || null);
-      }
-      projectKey = context?.projectKey || null;
-      projectRef = context?.projectRef || null;
-    }
-
     const previous = requests[event.requestId];
     const previousTotals =
       previous?.totals && typeof previous.totals === "object" ? previous.totals : null;
+
+    // Ownership recorded at first observation is authoritative. For a known
+    // request the ledger's session/project/conversation share survive copy
+    // deletion and fork timelines; for a new request the canonical retained
+    // record supplies them exactly once.
+    let projectKey = previous ? previous.projectKey || null : null;
+    let projectRef = previous ? previous.projectRef || null : null;
+    if (previous) {
+      const priorConv = previousTotals ? previousTotals.conversation_count : 0;
+      event.totals.conversation_count =
+        Number.isSafeInteger(priorConv) && priorConv >= 0 ? priorConv : 0;
+    } else {
+      if (projectEnabled && event.sessionId) {
+        let context = projectContextBySession.get(event.sessionId);
+        if (context === undefined) {
+          const startDir = event.workingDirectory
+            ? wsl.mapWslCwdToUnc(event.workingDirectory, resolvedDb)
+            : null;
+          context = startDir
+            ? await resolveProjectContextForPath({
+                startDir,
+                projectMetaCache,
+                publicRepoCache,
+                publicRepoResolver,
+                projectState,
+              })
+            : null;
+          projectContextBySession.set(event.sessionId, context || null);
+        }
+        projectKey = context?.projectKey || null;
+        projectRef = context?.projectRef || null;
+      }
+      // A fork made only of copied requests pays no conversation of its own;
+      // the first genuinely new request in a conversation pays it once.
+      const convKey = event.sessionId || `request:${event.requestId}`;
+      if (countedConversations[convKey] != null) {
+        event.totals.conversation_count = 0;
+      } else {
+        event.totals.conversation_count = 1;
+        countedConversations[convKey] = event.requestId;
+      }
+    }
+
     const unchanged =
       previousTotals &&
       totalsKey(previousTotals) === totalsKey(event.totals) &&
       previous.bucketStart === bucketStart &&
-      previous.model === event.model &&
-      (previous.projectKey || null) === projectKey;
+      previous.model === event.model;
     if (!unchanged) {
       if (previousTotals && previous.bucketStart && previous.model) {
         const oldBucket = getHourlyBucket(
@@ -13129,9 +13159,14 @@ async function parseDevinIncremental({
           projectBucketKey(projectKey, DEVIN_SOURCE, bucketStart),
         );
       }
-      // The ledger records only what was added: model, bucket, totals and the
-      // resolved project identity — never request text or raw working paths.
+      // The ledger records only what was added: owning session, model,
+      // bucket, totals and the resolved project identity — never request text
+      // or raw working paths.
       requests[event.requestId] = {
+        sessionId:
+          previous && typeof previous.sessionId === "string" && previous.sessionId
+            ? previous.sessionId
+            : event.sessionId,
         model: event.model,
         bucketStart,
         totals: event.totals,
@@ -13174,7 +13209,7 @@ async function parseDevinIncremental({
   cursors.devin = {
     version: 1,
     requests,
-    conversations: nextConversations,
+    conversations: countedConversations,
     fingerprint: sameSqliteFingerprint(initialFingerprint, finalFingerprint)
       ? finalFingerprint
       : initialFingerprint,

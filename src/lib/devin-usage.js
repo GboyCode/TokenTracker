@@ -151,16 +151,12 @@ function compareCandidates(a, b) {
   return b.rowId - a.rowId;
 }
 
-// Build the deduplicated per-request event list plus the next
-// session→request conversation-ownership map.
-//
-// `priorConversations` maps a conversation key (session_id, or
-// `request:<id>` for rows without a session) to the request_id that carries
-// that conversation's single +1 conversation_count. The marker survives the
-// owner's deletion: removing or compacting nodes must not refund the
-// conversation count, and re-pointing the marker at a surviving request
-// would count the same session twice.
-function buildDevinUsageEvents(rows, priorConversations) {
+// Build the deduplicated per-request event list. Conversation ownership and
+// session/project attribution are decided by the persisted request ledger in
+// parseDevinIncremental — the projection only reports each request's
+// best-evidence retained record; `conversation_count` stays 0 here and is
+// filled from ledger state at reconcile time.
+function buildDevinUsageEvents(rows) {
   const byRequest = new Map();
   let rowsSeen = 0;
   let rowsSkipped = 0;
@@ -202,30 +198,7 @@ function buildDevinUsageEvents(rows, priorConversations) {
   }
   events.sort((a, b) => a.tsMs - b.tsMs || (a.requestId < b.requestId ? -1 : 1));
 
-  const conversations =
-    priorConversations && typeof priorConversations === "object"
-      ? { ...priorConversations }
-      : {};
-  const eventsByRequest = new Map(events.map((event) => [event.requestId, event]));
-  const firstEventByConversation = new Map();
-  for (const event of events) {
-    const convKey = event.sessionId || `request:${event.requestId}`;
-    if (!firstEventByConversation.has(convKey)) firstEventByConversation.set(convKey, event);
-  }
-  for (const [convKey, earliest] of firstEventByConversation) {
-    const owner = typeof conversations[convKey] === "string" ? conversations[convKey] : null;
-    const ownerEvent = owner ? eventsByRequest.get(owner) : null;
-    if (ownerEvent) {
-      ownerEvent.totals.conversation_count = 1;
-    } else if (!owner) {
-      conversations[convKey] = earliest.requestId;
-      earliest.totals.conversation_count = 1;
-    }
-    // owner set but absent: keep the stale marker so the deleted request's
-    // historical +1 stays under its own ledger entry without re-adding it.
-  }
-
-  return { events, conversations, rowsSeen, rowsSkipped };
+  return { events, rowsSeen, rowsSkipped };
 }
 
 module.exports = {
