@@ -8,6 +8,8 @@
   "usage.overview.cache_hit_rate_label": "캐시 적중률",
   "usage.overview.cache_hit_rate_detail": "{{reused}} 재사용 / {{input}} 입력",
   "usage.overview.antigravity_notice_body": "Antigravity 기록에는 실제 사용량 수치가 저장되지 않습니다. 여기 표시된 수치는 텍스트 길이(약 4자/토큰)로 추정한 값이며 Gemini의 프롬프트 캐시 할인은 반영되지 않으므로, 청구 금액이 아니라 상한 추정치로 참고하세요.",
+  "usage.overview.devin_notice_title": "비용 미산정",
+  "usage.overview.devin_notice_body": "Devin은 실제 로컬 토큰 사용량을 보고하지만, 이 빌드에는 swe-2, swe-2-high, compactor의 가격 정보가 없어 달러 추정치에서 제외됩니다. $0로 표시돼도 무료 사용을 의미하지는 않습니다.",
   "stats.period.today": "오늘",
   "stats.period.week": "이번 주",
   "stats.period.month": "이번 달",

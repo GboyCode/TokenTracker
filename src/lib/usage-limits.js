@@ -11,7 +11,7 @@ const { promisify } = require("node:util");
 const {
   detectClaudeCodeCredentialsPresence,
   detectClaudeCodeSubscriptionDetails,
-  readClaudeCodeAccessToken,
+  readClaudeCodeOauthToken,
   readCodexAccessToken,
   readCodexAuthBundle,
 } = require("./subscriptions");
@@ -57,10 +57,10 @@ const DEFAULT_PROVIDER_TIMEOUT_MS = 15_000;
 const ANTIGRAVITY_LIMITS_CACHE_FILE = "usage-limits-cache.json";
 const ANTIGRAVITY_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const ANTIGRAVITY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS = 12 * 60 * 60 * 1000;
-// Public installed-app OAuth client used by Antigravity / agy (same id PokeTokenBar
-// and the agy binary embed). Not confidential — installed-app clients cannot keep a
-// secret. Used to refresh the on-disk Google token so quota can be read like
-// Claude/Codex without the IDE process running.
+// Same client id PokeTokenBar and the agy binary embed. This client requires a
+// client_secret; without it a refresh is rejected as 400 invalid_request, so
+// remote renewal is unavailable. After expiry, quota depends on a local
+// Antigravity/agy process or the user signing in again.
 const ANTIGRAVITY_OAUTH_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
 const ANTIGRAVITY_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const ANTIGRAVITY_LOAD_CODE_ASSIST_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
@@ -2574,22 +2574,44 @@ function resolveClaudeRateLimitPath({ home } = {}) {
   return path.join(home || os.homedir(), ".tokentracker", "tracker", CLAUDE_RATE_LIMIT_FILE);
 }
 
+function claudeTokenExpiryStamp(tokenExpiresAtMs) {
+  return Number.isFinite(tokenExpiresAtMs)
+    ? new Date(tokenExpiresAtMs).toISOString()
+    : null;
+}
+
 // Returns the cooldown expiry in ms if a 429 cooldown is still active, else null.
-function readClaudeRateLimitRetryAtMs({ home, nowMs = Date.now() } = {}) {
+// A cooldown armed for a previous access token must not outlive that token: after
+// the user refreshes the Claude Code login, forceRefresh still cannot punch through
+// this file, so a cooldown stamped with a different token expiry is discarded.
+// The token's own expiry identifies the credential without persisting anything
+// derived from the secret.
+function readClaudeRateLimitRetryAtMs({ home, nowMs = Date.now(), tokenExpiresAtMs } = {}) {
+  const cachePath = resolveClaudeRateLimitPath({ home });
   try {
-    const parsed = JSON.parse(fs.readFileSync(resolveClaudeRateLimitPath({ home }), "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
     const retryAtMs = parseTimeMs(parsed?.retry_at);
-    if (retryAtMs !== null && retryAtMs > nowMs) return retryAtMs;
+    if (retryAtMs === null || retryAtMs <= nowMs) return null;
+    const stampedExpiry = typeof parsed.token_expires_at === "string"
+      ? parsed.token_expires_at
+      : null;
+    if (stampedExpiry && stampedExpiry !== claudeTokenExpiryStamp(tokenExpiresAtMs)) {
+      clearClaudeRateLimitCooldown({ home });
+      return null;
+    }
+    return retryAtMs;
   } catch (_error) {}
   return null;
 }
 
-function writeClaudeRateLimitCooldown(retryAfterSec, { home, nowMs = Date.now() } = {}) {
+function writeClaudeRateLimitCooldown(retryAfterSec, { home, nowMs = Date.now(), tokenExpiresAtMs } = {}) {
   const sec = Number.isFinite(retryAfterSec) && retryAfterSec > 0
     ? Math.min(retryAfterSec, CLAUDE_RATE_LIMIT_MAX_COOLDOWN_SEC)
     : CLAUDE_RATE_LIMIT_DEFAULT_COOLDOWN_SEC;
   const cachePath = resolveClaudeRateLimitPath({ home });
   const payload = { retry_at: new Date(nowMs + sec * 1000).toISOString() };
+  const expiryStamp = claudeTokenExpiryStamp(tokenExpiresAtMs);
+  if (expiryStamp) payload.token_expires_at = expiryStamp;
   try {
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
     const tmpPath = `${cachePath}.${process.pid}.tmp`;
@@ -3128,18 +3150,41 @@ function parseAntigravityCredentialPayload(raw) {
   };
 }
 
-function loadAntigravityCredentialsFromFiles({ home } = {}) {
+function isAntigravityCredentialFresh(creds, nowMs) {
+  return creds.expiryMs != null && creds.expiryMs > nowMs + ANTIGRAVITY_TOKEN_REFRESH_SKEW_MS;
+}
+
+function pickLatestAntigravityExpiry(candidates) {
+  let best = candidates[0];
+  for (let i = 1; i < candidates.length; i += 1) {
+    const expiry = candidates[i].expiryMs;
+    if (expiry != null && (best.expiryMs == null || expiry > best.expiryMs)) {
+      best = candidates[i];
+    }
+  }
+  return best;
+}
+
+function pickAntigravityCredentials(candidates, nowMs) {
+  if (candidates.length === 0) return null;
+  const fresh = candidates.filter((creds) => isAntigravityCredentialFresh(creds, nowMs));
+  if (fresh.length > 0) return pickLatestAntigravityExpiry(fresh);
+  const unknown = candidates.filter((creds) => creds.expiryMs == null);
+  if (unknown.length > 0) return unknown[0];
+  return pickLatestAntigravityExpiry(candidates);
+}
+
+function collectAntigravityFileCredentials({ home } = {}) {
+  const candidates = [];
   for (const credPath of listAntigravityCredentialPaths(home)) {
     try {
       const parsed = parseAntigravityCredentialPayload(fs.readFileSync(credPath, "utf8"));
-      if (parsed) {
-        return { ...parsed, source: "file", path: credPath };
-      }
+      if (parsed) candidates.push({ ...parsed, source: "file", path: credPath });
     } catch {
       // missing or unreadable
     }
   }
-  return null;
+  return candidates;
 }
 
 function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
@@ -3170,14 +3215,18 @@ function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
   }
 }
 
-function loadAntigravityCredentials({ home, platform = process.platform, securityRunner } = {}) {
-  const fromFile = loadAntigravityCredentialsFromFiles({ home });
-  if (fromFile) return fromFile;
-  if (platform !== "darwin" && typeof securityRunner !== "function") return null;
-  const raw = readAntigravityKeychainRaw({ securityRunner });
-  const parsed = parseAntigravityCredentialPayload(raw);
-  if (!parsed) return null;
-  return { ...parsed, source: "keychain", path: null };
+function loadAntigravityCredentials({
+  home,
+  platform = process.platform,
+  securityRunner,
+  nowMs = Date.now(),
+} = {}) {
+  const candidates = collectAntigravityFileCredentials({ home });
+  if (platform === "darwin" || typeof securityRunner === "function") {
+    const parsed = parseAntigravityCredentialPayload(readAntigravityKeychainRaw({ securityRunner }));
+    if (parsed) candidates.push({ ...parsed, source: "keychain", path: null });
+  }
+  return pickAntigravityCredentials(candidates, nowMs);
 }
 
 function persistAntigravityCredentials(creds, next, { nowMs = Date.now() } = {}) {
@@ -3317,9 +3366,12 @@ async function fetchAntigravityRemoteLimits({
   fetchImpl = fetch,
   nowMs = Date.now(),
   signal,
+  creds,
 } = {}) {
-  const creds = loadAntigravityCredentials({ home, platform, securityRunner });
-  if (!creds) return null;
+  const resolvedCreds = creds !== undefined
+    ? creds
+    : loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
+  if (!resolvedCreds) return null;
 
   const loadWithToken = async (accessToken) => {
     const payload = await fetchAntigravityQuotaSummaryJson(fetchImpl, accessToken, signal);
@@ -3337,21 +3389,41 @@ async function fetchAntigravityRemoteLimits({
     };
   };
 
-  let accessToken = await resolveAntigravityAccessToken(creds, { fetchImpl, nowMs, signal });
+  let accessToken = await resolveAntigravityAccessToken(resolvedCreds, { fetchImpl, nowMs, signal });
   try {
     return await loadWithToken(accessToken);
   } catch (error) {
-    if (error?.code !== "AUTH_EXPIRED" || !creds.refreshToken) throw error;
-    accessToken = await resolveAntigravityAccessToken(creds, { fetchImpl, nowMs, forceRefresh: true, signal });
+    if (error?.code !== "AUTH_EXPIRED" || !resolvedCreds.refreshToken) throw error;
+    accessToken = await resolveAntigravityAccessToken(resolvedCreds, {
+      fetchImpl,
+      nowMs,
+      forceRefresh: true,
+      signal,
+    });
     return await loadWithToken(accessToken);
   }
 }
 
-function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, remoteError } = {}) {
+function antigravityCredentialsNeedReauth(creds, { nowMs, remoteError } = {}) {
+  if (remoteError?.code === "AUTH_EXPIRED") return true;
+  return Boolean(
+    creds
+    && creds.expiryMs != null
+    && creds.expiryMs <= nowMs + ANTIGRAVITY_TOKEN_REFRESH_SKEW_MS,
+  );
+}
+
+function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, remoteError, creds } = {}) {
   const cached = readAntigravityLimitsCache({ home, nowMs });
-  if (cached) return cached;
-  const creds = loadAntigravityCredentials({ home, platform, securityRunner });
-  if (!hasAntigravityInstallEvidence({ home }) && !creds) {
+  const resolvedCreds = creds !== undefined
+    ? creds
+    : loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
+  if (cached) {
+    return antigravityCredentialsNeedReauth(resolvedCreds, { nowMs, remoteError })
+      ? { ...cached, auth_action_required: "reauth" }
+      : cached;
+  }
+  if (!hasAntigravityInstallEvidence({ home }) && !resolvedCreds) {
     return { configured: false };
   }
   if (remoteError) {
@@ -3361,7 +3433,7 @@ function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, r
       : raw;
     return { configured: true, error: message };
   }
-  if (creds) {
+  if (resolvedCreds) {
     return { configured: true, error: ANTIGRAVITY_AUTH_EXPIRED_MESSAGE };
   }
   return { configured: true, error: ANTIGRAVITY_NOT_RUNNING_MESSAGE };
@@ -3390,6 +3462,7 @@ async function fetchAntigravityLimits({
   securityRunner,
   signal,
 } = {}) {
+  const creds = loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
   const startedAtMs = performance.now();
   // min(this step's ceiling, budget left after reserving the fallback guard).
   // 0 means "no time left" — the caller must skip the call, not issue it.
@@ -3430,7 +3503,15 @@ async function fetchAntigravityLimits({
   if (remoteTimeoutMs > 0) {
     try {
       const remote = await withProviderTimeout(
-        fetchAntigravityRemoteLimits({ home, platform, securityRunner, fetchImpl, nowMs, signal }),
+        fetchAntigravityRemoteLimits({
+          home,
+          platform,
+          securityRunner,
+          fetchImpl,
+          nowMs,
+          signal,
+          creds,
+        }),
         "Antigravity",
         remoteTimeoutMs,
       );
@@ -3455,7 +3536,14 @@ async function fetchAntigravityLimits({
       signal,
     });
     if (!processInfo.configured) {
-      return antigravityUnavailableResult({ home, nowMs, platform, securityRunner, remoteError });
+      return antigravityUnavailableResult({
+        home,
+        nowMs,
+        platform,
+        securityRunner,
+        remoteError,
+        creds,
+      });
     }
     if (processInfo.error) {
       return { configured: true, error: processInfo.error };
@@ -3561,6 +3649,7 @@ async function fetchAntigravityLimits({
       platform,
       securityRunner,
       remoteError: remoteError || error,
+      creds,
     });
   }
 }
@@ -3663,11 +3752,13 @@ async function fetchUsageLimitsUncached({
 } = {}) {
   const nowMs = Date.now();
 
-  const [claudeToken, claudeSubscription, codexAuth] = await Promise.all([
-    Promise.resolve().then(() => readClaudeCodeAccessToken({ platform, securityRunner, home })),
+  const [claudeOauth, claudeSubscription, codexAuth] = await Promise.all([
+    Promise.resolve().then(() => readClaudeCodeOauthToken({ platform, securityRunner, home, nowMs })),
     Promise.resolve().then(() => detectClaudeCodeSubscriptionDetails({ platform, securityRunner, home })),
     readCodexAuthBundle({ home, env }),
   ]);
+  const claudeToken = claudeOauth?.accessToken || null;
+  const claudeTokenExpiresAtMs = claudeOauth?.expiresAtMs ?? null;
   const claudePlanType = claudeSubscription?.planType || null;
 
   // Match the official Codex CLI: prefer the access token's JWT expiry and refresh only
@@ -3706,7 +3797,9 @@ async function fetchUsageLimitsUncached({
 
   // Skip the upstream Claude call entirely while a 429 cooldown is active — calling again
   // just renews the penalty. The result handling below serves cache or a cooldown message.
-  const claudeRetryAtMs = claudeToken ? readClaudeRateLimitRetryAtMs({ home, nowMs }) : null;
+  const claudeRetryAtMs = claudeToken
+    ? readClaudeRateLimitRetryAtMs({ home, nowMs, tokenExpiresAtMs: claudeTokenExpiresAtMs })
+    : null;
   // Also avoid cross-process hammering after a recent successful read: embedded-server
   // restarts and background polls read the disk cache instead of spending another Claude
   // OAuth usage request. An explicit user refresh (refresh=1 → forceRefresh) punches
@@ -3878,13 +3971,21 @@ async function fetchUsageLimitsUncached({
     // surface an accurate "retry in ~Nm" message rather than the misleading hardcoded one.
     const reason = claudeResult?.reason;
     if (reason?.code === "RATE_LIMITED") {
-      writeClaudeRateLimitCooldown(reason.retryAfterSec, { home, nowMs });
+      writeClaudeRateLimitCooldown(reason.retryAfterSec, {
+        home,
+        nowMs,
+        tokenExpiresAtMs: claudeTokenExpiresAtMs,
+      });
     }
     const cached = readClaudeLimitsCache({ home, nowMs });
     if (cached) {
       claude = cached;
     } else {
-      const retryAtMs = readClaudeRateLimitRetryAtMs({ home, nowMs }) || claudeRetryAtMs;
+      const retryAtMs = readClaudeRateLimitRetryAtMs({
+        home,
+        nowMs,
+        tokenExpiresAtMs: claudeTokenExpiresAtMs,
+      }) || claudeRetryAtMs;
       claude = {
         configured: true,
         error: retryAtMs
@@ -3907,7 +4008,11 @@ async function fetchUsageLimitsUncached({
   // cool-down just armed by this cycle's 429 is included; a successful read above
   // cleared the file, so this is null in the happy path.
   if (claude.configured) {
-    const claudeCooldownMs = readClaudeRateLimitRetryAtMs({ home, nowMs });
+    const claudeCooldownMs = readClaudeRateLimitRetryAtMs({
+      home,
+      nowMs,
+      tokenExpiresAtMs: claudeTokenExpiresAtMs,
+    });
     if (claudeCooldownMs) {
       claude.retry_at = new Date(claudeCooldownMs).toISOString();
     }

@@ -1857,6 +1857,52 @@ describe("getUsageLimits", () => {
     }
   });
 
+  it("skips the Claude usage API when the local token is already expired", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-local-expired-"));
+    try {
+      const nowMs = Date.now();
+      const claudeDir = path.join(tmp, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(claudeDir, ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "locally-expired-token",
+            expiresAt: nowMs - 60_000,
+          },
+        }),
+      );
+
+      let usageApiCalled = false;
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 1000,
+        securityRunner() {
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url) {
+          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+            usageApiCalled = true;
+            throw new Error("must not call the usage API for a locally expired token");
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+
+      assert.equal(result.claude.configured, true);
+      assert.equal(result.claude.auth_action_required, "reauth");
+      assert.equal(usageApiCalled, false);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("stays unconfigured when no Claude credential entry exists at all", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-no-creds-"));
@@ -3257,6 +3303,122 @@ describe("loadAntigravityCredentials", () => {
     assert.equal(creds.accessToken, "ya29.keychain");
     assert.equal(creds.source, "keychain");
   });
+
+  it("prefers a fresh keychain token over an expired file", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-fresh-kc-"));
+    try {
+      writeAntigravityOauthToken(tmp, { expiry: "2020-01-01T00:00:00Z" });
+      const creds = loadAntigravityCredentials({
+        home: tmp,
+        platform: "darwin",
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+        securityRunner() {
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              token: {
+                access_token: "ya29.keychain-fresh",
+                refresh_token: "1//keychain-fresh",
+                expiry: "2099-01-01T00:00:00Z",
+              },
+            }),
+          };
+        },
+      });
+      assert.equal(creds.source, "keychain");
+      assert.equal(creds.path, null);
+      assert.equal(creds.accessToken, "ya29.keychain-fresh");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers a fresh file over an expired keychain token", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-fresh-file-"));
+    try {
+      const credPath = writeAntigravityOauthToken(tmp);
+      const creds = loadAntigravityCredentials({
+        home: tmp,
+        platform: "darwin",
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+        securityRunner() {
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              token: {
+                access_token: "ya29.keychain-stale",
+                refresh_token: "1//keychain-stale",
+                expiry: "2020-01-01T00:00:00Z",
+              },
+            }),
+          };
+        },
+      });
+      assert.equal(creds.source, "file");
+      assert.equal(creds.path, credPath);
+      assert.equal(creds.accessToken, "ya29.agy-live");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("picks the newest expired credential when every candidate is stale", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-all-stale-"));
+    try {
+      writeAntigravityOauthToken(tmp, {
+        access_token: "ya29.older-file",
+        expiry: "2020-01-01T00:00:00Z",
+      });
+      const newerPath = path.join(tmp, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+      fs.mkdirSync(path.dirname(newerPath), { recursive: true });
+      fs.writeFileSync(newerPath, JSON.stringify({
+        token: {
+          access_token: "ya29.newer-file",
+          refresh_token: "1//newer-file",
+          expiry: "2024-06-01T00:00:00Z",
+        },
+      }), "utf8");
+      const creds = loadAntigravityCredentials({
+        home: tmp,
+        platform: "linux",
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+      });
+      assert.equal(creds.source, "file");
+      assert.equal(creds.path, newerPath);
+      assert.equal(creds.accessToken, "ya29.newer-file");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers an unknown-expiry credential over expired ones", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-unknown-expiry-"));
+    try {
+      writeAntigravityOauthToken(tmp, {
+        access_token: "ya29.expired-file",
+        expiry: "2020-01-01T00:00:00Z",
+      });
+      const unknownPath = path.join(tmp, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+      fs.mkdirSync(path.dirname(unknownPath), { recursive: true });
+      fs.writeFileSync(unknownPath, JSON.stringify({
+        token: {
+          access_token: "ya29.unknown-expiry",
+          refresh_token: "1//unknown-expiry",
+        },
+      }), "utf8");
+      const creds = loadAntigravityCredentials({
+        home: tmp,
+        platform: "linux",
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+      });
+      assert.equal(creds.source, "file");
+      assert.equal(creds.path, unknownPath);
+      assert.equal(creds.accessToken, "ya29.unknown-expiry");
+      assert.equal(creds.expiryMs, null);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Antigravity helpers", () => {
@@ -3980,6 +4142,86 @@ describe("fetchAntigravityLimits remote OAuth", () => {
       assert.equal(result.configured, true);
       assert.equal(result.cached, true);
       assert.equal(result.primary_window.used_percent, 33);
+      assert.equal(result.auth_action_required, undefined);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("flags reauth when expired credentials can only serve the disk cache", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-remote-reauth-"));
+    try {
+      writeAntigravityOauthToken(tmp, { expiry: "2020-01-01T00:00:00Z" });
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(trackerDir, "usage-limits-cache.json"),
+        JSON.stringify({
+          antigravity: {
+            primary_window: { used_percent: 33, reset_at: "2099-01-01T00:00:00.000Z" },
+            cached_at: "2026-08-31T00:00:00.000Z",
+          },
+        }),
+        "utf8",
+      );
+      const result = await fetchAntigravityLimits({
+        platform: "linux",
+        home: tmp,
+        commandRunner() { return { status: 1, stdout: "" }; },
+        async fetchImpl(url) {
+          if (String(url).includes("oauth2.googleapis.com/token")) {
+            return { ok: false, status: 400, async json() { return { error: "invalid_request" }; } };
+          }
+          return { ok: false, status: 503, async json() { return {}; } };
+        },
+        nowMs: Date.parse("2026-08-31T01:00:00.000Z"),
+      });
+      assert.equal(result.configured, true);
+      assert.equal(result.cached, true);
+      assert.equal(result.cached_at, "2026-08-31T00:00:00.000Z");
+      assert.equal(result.primary_window.used_percent, 33);
+      assert.equal(result.auth_action_required, "reauth");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the keychain at most once per fetchAntigravityLimits call", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-security-once-"));
+    try {
+      writeAntigravityOauthToken(tmp, { expiry: "2020-01-01T00:00:00Z" });
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(trackerDir, "usage-limits-cache.json"),
+        JSON.stringify({
+          antigravity: {
+            primary_window: { used_percent: 33, reset_at: "2099-01-01T00:00:00.000Z" },
+            cached_at: "2026-08-31T00:00:00.000Z",
+          },
+        }),
+        "utf8",
+      );
+      let securityCalls = 0;
+      const result = await fetchAntigravityLimits({
+        platform: "darwin",
+        home: tmp,
+        commandRunner() { return { status: 1, stdout: "" }; },
+        securityRunner() {
+          securityCalls += 1;
+          return { status: 1, stdout: "" };
+        },
+        async fetchImpl(url) {
+          if (String(url).includes("oauth2.googleapis.com/token")) {
+            return { ok: false, status: 400, async json() { return { error: "invalid_request" }; } };
+          }
+          return { ok: false, status: 503, async json() { return {}; } };
+        },
+        nowMs: Date.parse("2026-08-31T01:00:00.000Z"),
+      });
+      assert.equal(securityCalls, 1);
+      assert.equal(result.cached, true);
+      assert.equal(result.auth_action_required, "reauth");
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -4390,12 +4632,14 @@ describe("getUsageLimits Ark timeout fallback", () => {
 describe("getUsageLimits Claude stale fallback", () => {
   const FUTURE_RESET = "2099-01-01T00:00:00.000Z";
 
-  function makeClaudeHome(tmp) {
+  const CLAUDE_TOKEN_EXPIRES_AT_MS = Date.now() + 6 * 60 * 60 * 1000;
+
+  function makeClaudeHome(tmp, { expiresAt = CLAUDE_TOKEN_EXPIRES_AT_MS } = {}) {
     const claudeDir = path.join(tmp, ".claude");
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(
       path.join(claudeDir, ".credentials.json"),
-      JSON.stringify({ claudeAiOauth: { accessToken: "claude-token" } }),
+      JSON.stringify({ claudeAiOauth: { accessToken: "claude-token", expiresAt } }),
     );
   }
 
@@ -4588,6 +4832,144 @@ describe("getUsageLimits Claude stale fallback", () => {
       assert.equal(claudeCalls, 0, "forceRefresh must never bypass the 429 cooldown");
       assert.equal(limited.claude.configured, true);
       assert.match(limited.claude.error, /rate limited \(429\)/);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("drops a stamped cooldown when the access token rotates", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-rotate-"));
+    try {
+      makeClaudeHome(tmp);
+
+      const first = await runLimits(tmp, () => Promise.resolve({
+        ok: false,
+        status: 429,
+        headers: { get: (h) => (h === "retry-after" ? "600" : null) },
+      }));
+      assert.match(first.claude.error, /retry in ~10m/);
+
+      const cooldownPath = path.join(tmp, ".tokentracker", "tracker", "claude-usage-rate-limit.json");
+      const cooldown = JSON.parse(fs.readFileSync(cooldownPath, "utf8"));
+      assert.equal(cooldown.token_expires_at, new Date(CLAUDE_TOKEN_EXPIRES_AT_MS).toISOString());
+      assert.equal(JSON.stringify(cooldown).includes("claude-token"), false);
+
+      fs.writeFileSync(
+        path.join(tmp, ".claude", ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "claude-token-rotated",
+            expiresAt: CLAUDE_TOKEN_EXPIRES_AT_MS + 60 * 60 * 1000,
+          },
+        }),
+      );
+
+      let claudeCalls = 0;
+      resetUsageLimitsCache();
+      const retried = await runLimits(tmp, () => {
+        claudeCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            five_hour: { utilization: 7, resets_at: FUTURE_RESET },
+            seven_day: { utilization: 8, resets_at: FUTURE_RESET },
+            seven_day_opus: null,
+          }),
+        });
+      });
+
+      assert.equal(claudeCalls, 1, "a new token must be allowed to retry immediately");
+      assert.equal(retried.claude.error, null);
+      assert.equal(retried.claude.five_hour.utilization, 7);
+      assert.equal(fs.existsSync(cooldownPath), false);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a stamped cooldown while the same token is still armed", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-match-"));
+    try {
+      makeClaudeHome(tmp);
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(trackerDir, "claude-usage-rate-limit.json"),
+        JSON.stringify({
+          retry_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+          token_expires_at: new Date(CLAUDE_TOKEN_EXPIRES_AT_MS).toISOString(),
+        }),
+      );
+
+      let claudeCalls = 0;
+      const limited = await runLimits(tmp, () => {
+        claudeCalls += 1;
+        throw new Error("Claude endpoint must not be called during a matching cooldown");
+      });
+
+      assert.equal(claudeCalls, 0);
+      assert.match(limited.claude.error, /rate limited \(429\)/);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("honors a cooldown file written before token stamping as still active", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-legacy-"));
+    try {
+      makeClaudeHome(tmp);
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(trackerDir, "claude-usage-rate-limit.json"),
+        JSON.stringify({ retry_at: new Date(Date.now() + 30 * 60 * 1000).toISOString() }),
+      );
+
+      let claudeCalls = 0;
+      const limited = await runLimits(tmp, () => {
+        claudeCalls += 1;
+        throw new Error("legacy cooldown files without a token stamp must still block");
+      });
+
+      assert.equal(claudeCalls, 0);
+      assert.match(limited.claude.error, /rate limited \(429\)/);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a naturally expired cooldown file in place", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-cooldown-elapsed-"));
+    try {
+      makeClaudeHome(tmp);
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      const cooldownPath = path.join(trackerDir, "claude-usage-rate-limit.json");
+      fs.writeFileSync(
+        cooldownPath,
+        JSON.stringify({
+          retry_at: new Date(Date.now() - 1000).toISOString(),
+          token_expires_at: new Date(CLAUDE_TOKEN_EXPIRES_AT_MS).toISOString(),
+        }),
+      );
+
+      let claudeCalls = 0;
+      await runLimits(tmp, () => {
+        claudeCalls += 1;
+        return Promise.resolve({ ok: false, status: 500 });
+      });
+
+      assert.equal(claudeCalls, 1, "an elapsed cooldown must not block a retry");
+      assert.equal(fs.existsSync(cooldownPath), true, "elapsed cooldown files are left for the next write/clear");
     } finally {
       resetUsageLimitsCache();
       fs.rmSync(tmp, { recursive: true, force: true });

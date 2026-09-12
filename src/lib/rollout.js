@@ -21,6 +21,11 @@ const {
   currentCodexModel,
   snapshotCodexModelAttributionState,
 } = require("./codex-model-attribution");
+const {
+  DEVIN_TABLE_PROBE_SQL,
+  devinUsageSql,
+  buildDevinUsageEvents,
+} = require("./devin-usage");
 const { USD_TICKS_PER_USD, normalizeGrokUsage } = require("./grok-usage");
 
 const DEFAULT_SOURCE = "codex";
@@ -12900,6 +12905,395 @@ async function parseAnythingllmIncremental({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Devin (Cognition — devin.ai CLI)
+//
+// Data: SQLite at
+//   macOS/Linux: $XDG_DATA_HOME/devin/cli/sessions.db (~/.local/share)
+//   Windows:     no evidenced native location; the CLI's XDG data dir inside a
+//                WSL distro is probed via the \\wsl$ UNC bridge
+//   Override:    $TOKENTRACKER_DEVIN_DB
+//
+// Devin rewrites history aggressively: replay, compaction and forks copy
+// message_nodes rows, so several nodes share one chat_message
+// `.metadata.request_id` (verified on CLI 3000.10.21: ~2 duplicated nodes per
+// request). request_id is the billing identity — copies must not add usage.
+// Aggregation is a full projection + per-request reconcile keyed by
+// request_id: every fingerprint change re-reads the usage-only rows, the
+// ledger in cursors.devin.requests subtracts a request's prior contribution
+// before adding its current one, and deleted/compacted history keeps its
+// (non-refunded) ledger entry. There is no row_id high-water mark because
+// in-place metric corrections cannot be detected by one.
+//
+// Attribution recorded at first observation is authoritative: a request's
+// owning session, resolved project and conversation share live in the ledger,
+// so deleting the original node while a fork copy survives never migrates its
+// spend or refunds its conversation. A fork made only of copies pays nothing;
+// the first genuinely new request in a session pays its single
+// conversation_count once — the set of sessions that already paid is derived
+// from the ledger entries themselves, not persisted separately.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEVIN_SOURCE = "devin";
+
+function resolveDevinDbPath(env = process.env, deps = {}) {
+  const override =
+    typeof env.TOKENTRACKER_DEVIN_DB === "string" && env.TOKENTRACKER_DEVIN_DB.trim();
+  if (override) return path.resolve(env.TOKENTRACKER_DEVIN_DB.trim());
+  const home = env.HOME || env.USERPROFILE || os.homedir();
+  const xdgDataHome =
+    typeof env.XDG_DATA_HOME === "string" && env.XDG_DATA_HOME.trim()
+      ? path.resolve(env.XDG_DATA_HOME.trim())
+      : path.join(home, ".local", "share");
+  if (process.platform !== "win32") {
+    return path.join(xdgDataHome, "devin", "cli", "sessions.db");
+  }
+  // Devin CLI is not known to write a native-Windows data dir; on Windows its
+  // sessions.db lives under the distro's XDG home, reachable over \\wsl$.
+  const wslDir = wsl.shouldProbeWsl(env)
+    ? wsl.discoverWslHome(".local/share/devin/cli", { ...deps, env })
+    : null;
+  const wslValue = wslDir ? path.join(wslDir, "sessions.db") : null;
+  const paths = resolveInstallPaths({ nativeValue: null, wslValue }, env, deps);
+  return paths.native || paths.wsl;
+}
+
+function devinSqliteFingerprint(dbPath) {
+  const fingerprint = sqliteSidecarFingerprint(dbPath);
+  // -shm is reader bookkeeping: opening a WAL database can bump it without any
+  // content change, so it must not force a rescan (same convention as Unsloth).
+  delete fingerprint["-shm"];
+  return fingerprint;
+}
+
+// Request ids and conversation keys are untrusted strings — normalize the
+// persisted maps into null-prototype dictionaries so a literal "__proto__"
+// key stays an own entry that round-trips through cursors.json instead of
+// silently mutating the prototype chain (and re-adding that request's usage
+// on every rescan).
+function devinStringMap(value) {
+  const dict = Object.create(null);
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const key of Object.keys(value)) dict[key] = value[key];
+  }
+  return dict;
+}
+
+// Stage only the bucket objects this parser can mutate. The shared
+// normalizers copy the bucket maps but alias each bucket/totals object, and
+// the enqueue helpers stamp queuedKey before appendFile runs — so a failed
+// append used to leave the caller's published state polluted. Only
+// devin-owned entries get private copies; every other provider's buckets
+// stay shared read-only references.
+function stageDevinBuckets(buckets, isDevinBucket) {
+  const staged = {};
+  for (const [key, bucket] of Object.entries(buckets || {})) {
+    staged[key] =
+      bucket && typeof bucket === "object" && isDevinBucket(key, bucket)
+        ? {
+            ...bucket,
+            totals:
+              bucket.totals && typeof bucket.totals === "object"
+                ? { ...bucket.totals }
+                : bucket.totals,
+          }
+        : bucket;
+  }
+  return staged;
+}
+
+async function readDevinUsageRows(dbPath, sqliteOptions = {}) {
+  if (!dbPath || !fssync.existsSync(dbPath)) return [];
+  const options = {
+    label: "Devin",
+    maxBuffer: 32 * 1024 * 1024,
+    timeout: 30_000,
+    readOnly: true,
+    throwOnReadFailure: true,
+    ...sqliteOptions,
+  };
+  let snapshot = null;
+  let effectiveDbPath = dbPath;
+  if (isUncPath(dbPath)) {
+    try {
+      snapshot = snapshotSqliteDb(dbPath);
+      effectiveDbPath = snapshot.path;
+    } catch (_e) { }
+  }
+  try {
+    const tables = new Set(
+      (await readSqliteJsonRowsAsync(effectiveDbPath, DEVIN_TABLE_PROBE_SQL, options))
+        .map((row) => row?.name)
+        .filter(Boolean),
+    );
+    if (!tables.has("message_nodes")) return [];
+    return await readSqliteJsonRowsAsync(
+      effectiveDbPath,
+      devinUsageSql({ hasSessionsTable: tables.has("sessions") }),
+      options,
+    );
+  } finally {
+    if (snapshot) snapshot.cleanup();
+  }
+}
+
+async function parseDevinIncremental({
+  dbPath,
+  cursors,
+  queuePath,
+  projectQueuePath,
+  onProgress,
+  env,
+  sqliteOptions,
+  publicRepoResolver,
+} = {}) {
+  await ensureDir(path.dirname(queuePath));
+  const resolvedDb = dbPath || resolveDevinDbPath(env || process.env);
+  const priorState =
+    cursors.devin && typeof cursors.devin === "object" ? cursors.devin : {};
+  const requests = devinStringMap(priorState.requests);
+  if (!resolvedDb || !fssync.existsSync(resolvedDb)) {
+    const nextState = { ...priorState, requests, updatedAt: new Date().toISOString() };
+    delete nextState.conversations;
+    cursors.devin = nextState;
+    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
+  }
+
+  // Cheap unchanged check: skip all SQL work when neither the DB nor its WAL
+  // moved since the last published state.
+  const initialFingerprint = devinSqliteFingerprint(resolvedDb);
+  if (sameSqliteFingerprint(initialFingerprint, priorState.fingerprint)) {
+    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
+  }
+
+  const rows = await readDevinUsageRows(resolvedDb, sqliteOptions);
+  const { events } = buildDevinUsageEvents(rows);
+
+  // Stage the normalized working states: bucket-map copies alias the
+  // caller's published bucket objects, so give only the devin-owned entries
+  // (plus the flat groupQueued map) private copies. Reconciliation and
+  // enqueue mutations then land on staged state and are published only after
+  // both queue appends below succeed — a failed append leaves `cursors`
+  // untouched so a retry re-derives the same contribution and latest-wins
+  // rows recover either queue. Unrelated providers' buckets stay shared
+  // read-only references (this parser never writes their keys).
+  const hourlyState = normalizeHourlyState(cursors?.hourly);
+  hourlyState.buckets = stageDevinBuckets(
+    hourlyState.buckets,
+    (key) =>
+      (normalizeSourceInput(parseBucketKey(key).source) || DEFAULT_SOURCE) ===
+      DEVIN_SOURCE,
+  );
+  hourlyState.groupQueued =
+    hourlyState.groupQueued && typeof hourlyState.groupQueued === "object"
+      ? { ...hourlyState.groupQueued }
+      : {};
+  const touchedBuckets = new Set();
+  const projectEnabled =
+    typeof projectQueuePath === "string" && projectQueuePath.length > 0;
+  const projectState = projectEnabled
+    ? normalizeProjectState(cursors?.projectHourly)
+    : null;
+  if (projectState) {
+    // Project bucket keys are `projectKey|source|hourStart`; this parser only
+    // ever looks up keys whose middle segment is the devin source.
+    projectState.buckets = stageDevinBuckets(projectState.buckets, (key) => {
+      const last = key.lastIndexOf(BUCKET_SEPARATOR);
+      const prev = last > 0 ? key.lastIndexOf(BUCKET_SEPARATOR, last - 1) : -1;
+      const source = prev >= 0 ? key.slice(prev + 1, last) : "";
+      return (
+        (normalizeSourceInput(source) || DEFAULT_SOURCE) === DEVIN_SOURCE
+      );
+    });
+  }
+  const projectTouchedBuckets = projectEnabled ? new Set() : null;
+  const projectMetaCache = projectEnabled ? new Map() : null;
+  const publicRepoCache = projectEnabled ? new Map() : null;
+  const projectContextBySession = projectEnabled ? new Map() : null;
+  const cb = typeof onProgress === "function" ? onProgress : null;
+  let eventsAggregated = 0;
+
+  // The counted-conversation index is derived from the retained ledger: the
+  // entry that paid a conversation's +1 keeps that share in its own totals,
+  // even after every copy of the request vanished — no second persisted map.
+  const countedConversations = new Set();
+  for (const [requestId, entry] of Object.entries(requests)) {
+    const totals = entry && typeof entry === "object" ? entry.totals : null;
+    if (totals && Number.isSafeInteger(totals.conversation_count) && totals.conversation_count >= 1) {
+      countedConversations.add(
+        typeof entry.sessionId === "string" && entry.sessionId
+          ? entry.sessionId
+          : `request:${requestId}`,
+      );
+    }
+  }
+
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
+    const bucketStart = toUtcHalfHourStart(new Date(event.tsMs).toISOString());
+    if (!bucketStart) continue;
+
+    const previous = requests[event.requestId];
+    const previousTotals =
+      previous?.totals && typeof previous.totals === "object" ? previous.totals : null;
+
+    // Ownership recorded at first observation is authoritative. For a known
+    // request the ledger's session/project/conversation share survive copy
+    // deletion and fork timelines; for a new request the canonical retained
+    // record supplies them exactly once.
+    let projectKey = previous ? previous.projectKey || null : null;
+    let projectRef = previous ? previous.projectRef || null : null;
+    if (previous) {
+      const priorConv = previousTotals ? previousTotals.conversation_count : 0;
+      event.totals.conversation_count =
+        Number.isSafeInteger(priorConv) && priorConv >= 0 ? priorConv : 0;
+    } else {
+      if (projectEnabled && event.sessionId) {
+        let context = projectContextBySession.get(event.sessionId);
+        if (context === undefined) {
+          const startDir = event.workingDirectory
+            ? wsl.mapWslCwdToUnc(event.workingDirectory, resolvedDb)
+            : null;
+          context = startDir
+            ? await resolveProjectContextForPath({
+                startDir,
+                projectMetaCache,
+                publicRepoCache,
+                publicRepoResolver,
+                projectState,
+              })
+            : null;
+          projectContextBySession.set(event.sessionId, context || null);
+        }
+        projectKey = context?.projectKey || null;
+        projectRef = context?.projectRef || null;
+      }
+      // A fork made only of copied requests pays no conversation of its own;
+      // the first genuinely new request in a conversation pays it once.
+      const convKey = event.sessionId || `request:${event.requestId}`;
+      if (countedConversations.has(convKey)) {
+        event.totals.conversation_count = 0;
+      } else {
+        event.totals.conversation_count = 1;
+        countedConversations.add(convKey);
+      }
+    }
+
+    const unchanged =
+      previousTotals &&
+      totalsKey(previousTotals) === totalsKey(event.totals) &&
+      previous.bucketStart === bucketStart &&
+      previous.model === event.model;
+    if (!unchanged) {
+      if (previousTotals && previous.bucketStart && previous.model) {
+        const oldBucket = getHourlyBucket(
+          hourlyState,
+          DEVIN_SOURCE,
+          previous.model,
+          previous.bucketStart,
+        );
+        subtractTotals(oldBucket.totals, previousTotals);
+        touchedBuckets.add(
+          bucketKey(DEVIN_SOURCE, previous.model, previous.bucketStart),
+        );
+        if (projectEnabled && previous.projectKey) {
+          const oldProjectBucket = getProjectBucket(
+            projectState,
+            previous.projectKey,
+            DEVIN_SOURCE,
+            previous.bucketStart,
+            previous.projectRef || null,
+          );
+          subtractTotals(oldProjectBucket.totals, previousTotals);
+          projectTouchedBuckets.add(
+            projectBucketKey(previous.projectKey, DEVIN_SOURCE, previous.bucketStart),
+          );
+        }
+      }
+
+      const bucket = getHourlyBucket(hourlyState, DEVIN_SOURCE, event.model, bucketStart);
+      addTotals(bucket.totals, event.totals);
+      touchedBuckets.add(bucketKey(DEVIN_SOURCE, event.model, bucketStart));
+      if (projectEnabled && projectKey) {
+        const projectBucket = getProjectBucket(
+          projectState,
+          projectKey,
+          DEVIN_SOURCE,
+          bucketStart,
+          projectRef,
+        );
+        addTotals(projectBucket.totals, event.totals);
+        projectTouchedBuckets.add(
+          projectBucketKey(projectKey, DEVIN_SOURCE, bucketStart),
+        );
+      }
+      // The ledger records only what was added: owning session, model,
+      // bucket, totals and the resolved project identity — never request text
+      // or raw working paths.
+      requests[event.requestId] = {
+        sessionId:
+          previous && typeof previous.sessionId === "string" && previous.sessionId
+            ? previous.sessionId
+            : event.sessionId,
+        model: event.model,
+        bucketStart,
+        totals: event.totals,
+        projectKey,
+        projectRef,
+        updatedAt: new Date().toISOString(),
+      };
+      eventsAggregated += 1;
+    }
+    if (cb) {
+      cb({
+        index: index + 1,
+        total: events.length,
+        recordsProcessed: index + 1,
+        eventsAggregated,
+        bucketsQueued: touchedBuckets.size,
+      });
+    }
+  }
+
+  const bucketsQueued = await enqueueTouchedBuckets({
+    queuePath,
+    hourlyState,
+    touchedBuckets,
+  });
+  const projectBucketsQueued = projectEnabled
+    ? await enqueueTouchedProjectBuckets({
+        projectQueuePath,
+        projectState,
+        projectTouchedBuckets,
+      })
+      : 0;
+  // If Devin wrote to the DB/WAL while we read, publish the pre-read
+  // fingerprint so the next sync re-reads instead of acknowledging a snapshot
+  // it never saw (same convention as parseUnslothIncremental).
+  const finalFingerprint = devinSqliteFingerprint(resolvedDb);
+  const updatedAt = new Date().toISOString();
+  hourlyState.updatedAt = updatedAt;
+  cursors.hourly = hourlyState;
+  cursors.devin = {
+    version: 1,
+    requests,
+    fingerprint: sameSqliteFingerprint(initialFingerprint, finalFingerprint)
+      ? finalFingerprint
+      : initialFingerprint,
+    updatedAt,
+  };
+  if (projectState) {
+    projectState.updatedAt = updatedAt;
+    cursors.projectHourly = projectState;
+  }
+  return {
+    recordsProcessed: rows.length,
+    eventsAggregated,
+    bucketsQueued,
+    projectBucketsQueued,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Goose (Block AI agent — github.com/block/goose)
 //
 // Data: SQLite at
@@ -14652,6 +15046,8 @@ async function parsePiLikeIncremental({
   sessionFiles,
   cursors,
   queuePath,
+  projectQueuePath,
+  publicRepoResolver,
   onProgress,
   env,
   defaultModel,
@@ -14661,6 +15057,7 @@ async function parsePiLikeIncremental({
   sourceForProvider,
 } = {}) {
   await ensureDir(path.dirname(queuePath));
+  const projectEnabled = typeof projectQueuePath === "string" && projectQueuePath.length > 0;
   const providerState = cursors[stateKey] && typeof cursors[stateKey] === "object"
     ? cursors[stateKey]
     : {};
@@ -14669,6 +15066,9 @@ async function parsePiLikeIncremental({
     providerState.fileOffsets && typeof providerState.fileOffsets === "object"
       ? { ...providerState.fileOffsets }
       : {};
+
+  const projectSeenIds = new Set(Array.isArray(providerState.projectSeenIds) ? providerState.projectSeenIds : []);
+  const projectFileOffsets = { ...(providerState.projectFileOffsets || {}) };
 
   const files = Array.isArray(sessionFiles)
     ? sessionFiles
@@ -14682,11 +15082,33 @@ async function parsePiLikeIncremental({
       fileOffsets,
       updatedAt: new Date().toISOString(),
     };
-    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
   }
 
   const hourlyState = normalizeHourlyState(cursors?.hourly);
   const touchedBuckets = new Set();
+  const projectState = projectEnabled ? normalizeProjectState(cursors?.projectHourly) : null;
+  const projectTouchedBuckets = projectEnabled ? new Set() : null;
+  const projectMetaCache = projectEnabled ? new Map() : null;
+  const publicRepoCache = projectEnabled ? new Map() : null;
+  // Both queues must publish before cursor progress is acknowledged. Normalized
+  // bucket maps still alias their values, so stage this provider's buckets to
+  // keep a failed project append from mutating the caller's aggregate state.
+  const family = sourceForProvider(null);
+  const ownsSource = (source) => source === family || source.startsWith(`${family}-`);
+  hourlyState.groupQueued = { ...(hourlyState.groupQueued || {}) };
+  for (const [key, bucket] of Object.entries(hourlyState.buckets)) {
+    if (ownsSource(parseBucketKey(key).source || "")) {
+      hourlyState.buckets[key] = { ...bucket, totals: { ...bucket.totals } };
+    }
+  }
+  if (projectState) {
+    for (const [key, bucket] of Object.entries(projectState.buckets)) {
+      if (ownsSource(bucket.source || "")) {
+        projectState.buckets[key] = { ...bucket, totals: { ...bucket.totals } };
+      }
+    }
+  }
   const cb = typeof onProgress === "function" ? onProgress : null;
   let recordsProcessed = 0;
   let eventsAggregated = 0;
@@ -14825,6 +15247,135 @@ async function parsePiLikeIncremental({
     };
   }
 
+  // Project attribution has an independent cursor so upgrading an existing
+  // installation can backfill already-consumed Pi sessions without adding
+  // those messages to the total-usage buckets a second time. Current Pi
+  // session headers persist the real cwd; unlike the encoded session folder,
+  // it is lossless even when path components contain dashes.
+  if (projectEnabled) {
+    for (const filePath of files) {
+      let stat;
+      try { stat = fssync.statSync(filePath); } catch { continue; }
+
+      const prevEntry = projectFileOffsets[filePath] || {};
+      const prevSize = Number(prevEntry.size) || 0;
+      const prevIno = prevEntry.ino;
+      const inodeChanged = typeof prevIno === "number" && prevIno !== stat.ino;
+      const startOffset = stat.size < prevSize || inodeChanged ? 0 : prevSize;
+      if (stat.size <= startOffset) continue;
+
+      const cwd = await resolveOmpFileCwd(filePath);
+      const projectContext = cwd
+        ? await resolveProjectContextForPath({
+            startDir: wsl.mapWslCwdToUnc(cwd, filePath),
+            projectMetaCache,
+            publicRepoCache,
+            publicRepoResolver,
+            projectState,
+          })
+        : null;
+      const projectRef = projectContext?.projectRef || null;
+      const projectKey = projectContext?.projectKey || null;
+
+      let lastCompleteOffset = startOffset;
+      if (projectKey && projectRef) {
+        let stream;
+        try {
+          stream = fssync.createReadStream(filePath, {
+            encoding: "utf8",
+            start: startOffset,
+          });
+        } catch {
+          continue;
+        }
+        let streamedBytes = 0;
+        stream.on("data", (chunk) => {
+          const newlineIndex = chunk.lastIndexOf("\n");
+          if (newlineIndex !== -1) {
+            lastCompleteOffset = startOffset + streamedBytes
+              + Buffer.byteLength(chunk.slice(0, newlineIndex + 1), "utf8");
+          }
+          streamedBytes += Buffer.byteLength(chunk, "utf8");
+        });
+        const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+        for await (const line of rl) {
+          if (!line || !line.trim()) continue;
+          let entry;
+          try { entry = JSON.parse(line); } catch { continue; }
+          const msg = entry?.type === "message" ? entry.message : null;
+          const usage = msg?.role === "assistant" ? msg.usage : null;
+          if (!usage || typeof usage !== "object") continue;
+
+          const entryId = typeof entry.id === "string" && entry.id ? entry.id : null;
+          if (!entryId || projectSeenIds.has(entryId)) continue;
+
+          const input = toNonNegativeInt(usage.input);
+          const output = toNonNegativeInt(usage.output);
+          const cacheRead = toNonNegativeInt(usage.cacheRead);
+          const cacheWrite = toNonNegativeInt(usage.cacheWrite);
+          const reasoningTokens = toNonNegativeInt(usage.reasoningTokens);
+          if (
+            input === 0 &&
+            output === 0 &&
+            cacheRead === 0 &&
+            cacheWrite === 0 &&
+            reasoningTokens === 0
+          ) {
+            projectSeenIds.add(entryId);
+            continue;
+          }
+
+          let tsMs = null;
+          if (Number.isFinite(Number(msg.timestamp)) && Number(msg.timestamp) > 0) {
+            tsMs = Number(msg.timestamp);
+          } else if (typeof entry.timestamp === "string" && entry.timestamp) {
+            const parsed = Date.parse(entry.timestamp);
+            if (Number.isFinite(parsed) && parsed > 0) tsMs = parsed;
+          }
+          const bucketStart = tsMs == null
+            ? null
+            : toUtcHalfHourStart(new Date(tsMs).toISOString());
+          if (!bucketStart) {
+            projectSeenIds.add(entryId);
+            continue;
+          }
+
+          const totalTokens =
+            Number.isFinite(Number(usage.totalTokens)) && Number(usage.totalTokens) > 0
+              ? toNonNegativeInt(usage.totalTokens)
+              : input + output + cacheRead + cacheWrite + reasoningTokens;
+          const delta = {
+            input_tokens: input,
+            cached_input_tokens: cacheRead,
+            cache_creation_input_tokens: cacheWrite,
+            output_tokens: output,
+            reasoning_output_tokens: reasoningTokens,
+            total_tokens: totalTokens,
+            conversation_count: 1,
+          };
+          const projectBucket = getProjectBucket(
+            projectState,
+            projectKey,
+            sourceForProvider(msg.provider),
+            bucketStart,
+            projectRef,
+          );
+          addTotals(projectBucket.totals, delta);
+          projectTouchedBuckets.add(projectBucketKey(projectKey, sourceForProvider(msg.provider), bucketStart));
+          projectSeenIds.add(entryId);
+        }
+      }
+
+      let postStat = stat;
+      try { postStat = fssync.statSync(filePath); } catch {}
+      projectFileOffsets[filePath] = {
+        size: Math.min(lastCompleteOffset, postStat.size),
+        mtimeMs: postStat.mtimeMs,
+        ino: postStat.ino,
+      };
+    }
+  }
+
   const seenArr = Array.from(seenIds);
   const cappedSeen =
     seenArr.length > 10_000 ? seenArr.slice(seenArr.length - 10_000) : seenArr;
@@ -14834,17 +15385,28 @@ async function parsePiLikeIncremental({
     hourlyState,
     touchedBuckets,
   });
+  const projectBucketsQueued = projectEnabled
+    ? await enqueueTouchedProjectBuckets({ projectQueuePath, projectState, projectTouchedBuckets })
+    : 0;
   const updatedAt = new Date().toISOString();
   hourlyState.updatedAt = updatedAt;
   cursors.hourly = hourlyState;
+  if (projectState) {
+    projectState.updatedAt = updatedAt;
+    cursors.projectHourly = projectState;
+  }
   cursors[stateKey] = {
     ...providerState,
     seenIds: cappedSeen,
     fileOffsets,
+    ...(projectEnabled ? {
+      projectSeenIds: Array.from(projectSeenIds).slice(-10_000),
+      projectFileOffsets,
+    } : {}),
     updatedAt,
   };
 
-  return { recordsProcessed, eventsAggregated, bucketsQueued };
+  return { recordsProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }
 
 async function parsePiIncremental(options = {}) {
@@ -21167,6 +21729,9 @@ module.exports = {
   parseAnythingllmTimestamp,
   readAnythingllmUsageRows,
   parseAnythingllmIncremental,
+  resolveDevinDbPath,
+  readDevinUsageRows,
+  parseDevinIncremental,
   resolveGooseDbPath,
   parseGooseModelName,
   parseGooseCreatedAt,

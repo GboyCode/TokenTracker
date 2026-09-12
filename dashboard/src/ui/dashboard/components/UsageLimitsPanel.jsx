@@ -294,6 +294,7 @@ const STATUS_BADGE_TONES = {
 const REAUTH_CLI_COMMANDS = {
   claude: "claude",
   codex: "codex",
+  antigravity: "agy",
 };
 
 function StatusBadge({ label, age = null, tone = "live", tooltip = null }) {
@@ -704,7 +705,24 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
   const baseName = limitProviderName(id);
   const title = data.plan_label ? `${baseName} ${data.plan_label}` : baseName;
   let badge = null;
-  if (id === "antigravity") {
+  // Reauth is more actionable than a cached/live freshness badge: the bars
+  // will not move again until the user signs in, even if a disk snapshot
+  // is still visible.
+  if (data.auth_action_required === "reauth") {
+    const command =
+      id === "commandCode"
+        ? commandCodeLoginSnippet()
+        : REAUTH_CLI_COMMANDS[id];
+    badge = (
+      <StatusBadge
+        label={copy("limits.reauth.badge")}
+        age={ago(data.cached_at)}
+        tone="stale"
+        tooltip={command ? copy("limits.reauth.tooltip", { command }) : null}
+      />
+    );
+  }
+  if (!badge && id === "antigravity") {
     if (data.cached) {
       const suffix = ago(data.cached_at);
       badge = <StatusBadge label={copy("limits.label.antigravity_cached")} age={suffix} tone="cached" tooltip={copy("limits.tooltip.antigravity_cached")} />;
@@ -712,7 +730,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
       badge = <StatusBadge label={copy("limits.label.antigravity_live")} tone="live" tooltip={copy("limits.tooltip.antigravity_live")} />;
     }
   }
-  if ((id === "qoder" || id === "qoderCn") && data.cached) {
+  if (!badge && (id === "qoder" || id === "qoderCn") && data.cached) {
     badge = (
       <StatusBadge
         label={copy("limits.label.antigravity_cached")}
@@ -724,30 +742,13 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
   }
   // Ark plans are refreshed by the local arkcli binary, not by launching an
   // app — a Qoder-specific tooltip would send users to the wrong tool.
-  if ((id === "codingPlan" || id === "agentPlan") && data.cached) {
+  if (!badge && (id === "codingPlan" || id === "agentPlan") && data.cached) {
     badge = (
       <StatusBadge
         label={copy("limits.label.antigravity_cached")}
         age={ago(data.cached_at)}
         tone="cached"
         tooltip={copy("limits.tooltip.ark_cached")}
-      />
-    );
-  }
-  // An expired sign-in means every live fetch fails the same way and the bars
-  // silently freeze on the cached snapshot (issue 330) — more actionable than
-  // the generic stale badge below, so it takes precedence.
-  if (!badge && data.auth_action_required === "reauth") {
-    const command =
-      id === "commandCode"
-        ? commandCodeLoginSnippet()
-        : REAUTH_CLI_COMMANDS[id];
-    badge = (
-      <StatusBadge
-        label={copy("limits.reauth.badge")}
-        age={ago(data.cached_at)}
-        tone="stale"
-        tooltip={command ? copy("limits.reauth.tooltip", { command }) : null}
       />
     );
   }

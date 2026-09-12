@@ -81,6 +81,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
     // WebView (to read the currency) once the dashboard has been opened.
     private readonly System.Windows.Forms.Timer _refreshTimer = new() { Interval = 2000 };
     private readonly System.Windows.Forms.Timer _syncTimer = new() { Interval = 5 * 60 * 1000 };
+    // Tray apps stay resident for days, so the launch-time update check alone can
+    // miss releases for as long as the app runs. Re-check periodically; the checker
+    // self-skips while a check/download is already in flight.
+    private const int UpdateCheckIntervalMinutes = 6 * 60;
+    private readonly System.Windows.Forms.Timer _updateCheckTimer = new()
+    {
+        Interval = UpdateCheckIntervalMinutes * 60 * 1000,
+    };
     // WebView currency reads are asynchronous. Timer ticks, menu opens, and
     // poller callbacks can arrive while one read is still pending; keep one
     // pass active and request one follow-up pass for the newest stats instead
@@ -239,6 +247,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         });
         _updateChecker.QuitRequested += () => PostToUi(Quit);
         _ = _updateChecker.CheckAsync(silent: true);
+        _updateCheckTimer.Tick += (_, _) => _ = _updateChecker.CheckAsync(silent: true);
+        _updateCheckTimer.Start();
 
         // The desktop pet is the app's visible presence now — the dashboard no longer
         // auto-opens. A stored preference (user toggled the pet at least once) always
@@ -1139,6 +1149,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             _refreshTimer.Dispose();
             _syncTimer.Dispose();
+            _updateCheckTimer.Dispose();
             _poller.Dispose();
             _server.Dispose();
             _trayIcon.Dispose();

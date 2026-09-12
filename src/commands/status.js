@@ -81,6 +81,7 @@ const {
   listQoderNewSessionFiles,
   resolveClaudeScienceDbPaths,
   resolveAnythingllmDbPath,
+  resolveDevinDbPath,
   resolveGooseDbPath,
   listDroidSettingsFiles,
   resolveDroidSessionsDir,
@@ -705,6 +706,10 @@ async function cmdStatus(argv = []) {
   const unslothDbPath = resolveUnslothDbPath(process.env);
   const unslothInstalled = Boolean(unslothDbPath && fssync.existsSync(unslothDbPath));
 
+  // Devin CLI (Cognition) — passive reader of message_nodes usage metrics.
+  const devinDbPath = resolveDevinDbPath(process.env);
+  const devinInstalled = Boolean(devinDbPath && fssync.existsSync(devinDbPath));
+
   // Trae SOLO (ByteDance AI IDE) — passive entitlement snapshot reader.
   const traeStoragePath = resolveTraeStoragePath(process.env);
   const traeInstalled = Boolean(traeStoragePath);
@@ -1044,6 +1049,9 @@ async function cmdStatus(argv = []) {
         unsloth: unslothInstalled
           ? { installed: true, detail: unslothDbPath }
           : { installed: false },
+        devin: devinInstalled
+          ? { installed: true, detail: devinDbPath }
+          : { installed: false },
         trae: traeInstalled
           ? {
               installed: true,
@@ -1229,6 +1237,9 @@ async function cmdStatus(argv = []) {
         : null,
       unslothInstalled
         ? `- Unsloth Studio: passive reader (${unslothDbPath})`
+        : null,
+      devinInstalled
+        ? `- Devin CLI: passive reader (${devinDbPath})`
         : null,
       traeInstalled
         // Deliberately NOT "passive reader": every other line with that wording
