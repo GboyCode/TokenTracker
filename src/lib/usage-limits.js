@@ -4256,7 +4256,6 @@ module.exports = {
   fetchZcodeLimits,
   fetchOpencodeGoLimits,
   fetchCommandcodeLimits,
-  fetchDevinLimits,
   fetchQoderLimits,
   fetchQoderCnLimits,
 };

@@ -980,19 +980,7 @@ function CommandCodeSetupHint() {
 // file, so all the row needs is the CLI installed and signed in once.
 // TokenTracker only ever sends that token to Devin's official quota endpoint.
 function DevinSetupHint() {
-  const [copied, setCopied] = useState(false);
   const loginSnippet = devinLoginSnippet();
-
-  const onCopy = async (e) => {
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(loginSnippet);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1600);
-    } catch (_e) {
-      // Clipboard can be unavailable in embedded or restricted contexts.
-    }
-  };
 
   return (
     <div className="mt-1.5 rounded-lg border border-oai-gray-200 dark:border-oai-gray-700/60 bg-oai-gray-50/50 dark:bg-oai-gray-900/20 p-3 text-[11px] text-oai-gray-600 dark:text-oai-gray-300">
@@ -1009,17 +997,6 @@ function DevinSetupHint() {
           <pre className="mt-1.5 overflow-x-auto rounded-md bg-oai-gray-100 dark:bg-oai-gray-900/60 px-2 py-1.5 font-mono text-[10.5px] leading-relaxed whitespace-pre">
             {loginSnippet}
           </pre>
-          <div className="mt-1.5 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onCopy}
-              className="shrink-0 rounded-md border border-oai-gray-300 dark:border-oai-gray-700 px-2 py-0.5 text-[10.5px] text-oai-gray-700 dark:text-oai-gray-200 hover:bg-oai-gray-100 dark:hover:bg-oai-gray-800 transition-colors"
-            >
-              {copied
-                ? copy("limits.devin.setupHint.copied")
-                : copy("limits.devin.setupHint.copy")}
-            </button>
-          </div>
           <div className="mt-1 text-[10px] text-oai-gray-400 dark:text-oai-gray-500">
             {copy("limits.devin.setupHint.note")}
           </div>

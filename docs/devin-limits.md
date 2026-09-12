@@ -43,7 +43,7 @@ The CLI writes `$XDG_DATA_HOME/devin/credentials.toml` (falling back to `~/.loca
 | `dailyQuotaResetAtUnix` | int64 unix seconds (JSON string) | `primary_window.reset_at` (ISO) |
 | `weeklyQuotaResetAtUnix` | int64 unix seconds (JSON string) | `secondary_window.reset_at` (ISO) |
 
-Each emitted window also carries `limit_window_seconds` (86400 daily, 604800 weekly) for pacing. Reset times are always the server's timestamps — the observed daily boundary is 08:00 UTC and the weekly boundary Sunday 08:00 UTC, but these are account observations, not constants the code assumes.
+Each emitted window also carries `limit_window_seconds` (86400 daily, 604800 weekly) for pacing. Reset times are always the server's own timestamps.
 
 ### Implicit scalar semantics
 
@@ -60,9 +60,13 @@ Max-tier window shapes have not been verified against a live Max account; the be
 
 ## Errors
 
+Every failure surfaces through owned, fixed messages — the provider never forwards upstream bodies, filesystem paths, token values or account identifiers into UI-visible errors.
+
+- No credentials file → `configured: false` and the panel shows the sign-in hint.
+- A credentials file that exists but cannot be read (permissions, wrong type) → a fixed credential-read error pointing at `devin auth login`; only `ENOENT` counts as "not signed in".
 - `401` / `403` → the saved session token expired or was rejected. The aggregate flags `auth_action_required: "reauth"` and the panel points at `devin auth login`.
 - `400` → an ambiguous request rejection, **not** proof of expiry; surfaced as a plain provider error.
-- Other transport/schema failures → a readable provider error that never contains response bodies, token values, account identifiers or filesystem paths.
+- Transport failures → a fixed `Devin quota request failed.` (aborts report as a timeout); schema failures → a fixed malformed-response error.
 
 ## Brand asset
 
@@ -70,7 +74,7 @@ Max-tier window shapes have not been verified against a live Max account; the be
 
 ## Implementation boundaries
 
-The implementation lives in `src/lib/devin-limits.js` and is wired into the shared provider poll in `src/lib/usage-limits.js`, reusing the existing timeout, single-flight, two-minute cache and provenance machinery. It shares the generic `primary_window` / `secondary_window` schema, so dashboard, macOS and widget surfaces consume it like any other two-window provider.
+The implementation lives in `src/lib/devin-limits.js`, whose only export is `fetchDevinLimits({ home, env, fetchImpl })`. It is wired into the shared provider poll in `src/lib/usage-limits.js`, which owns freshness (`stale`, `cached_at`) and reuses the existing timeout, single-flight, two-minute cache and provenance machinery. The provider shares the generic `primary_window` / `secondary_window` schema, so dashboard, macOS and widget surfaces consume it like any other two-window provider.
 
 ## Tests and validation
 

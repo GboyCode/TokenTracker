@@ -963,21 +963,4 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByText("Connect Devin")).toBeInTheDocument();
     expect(screen.getByText("devin auth login")).toBeInTheDocument();
   });
-
-  it("copies the Devin sign-in snippet", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
-
-    render(
-      <UsageLimitsPanel devin={{ configured: false }} order={["devin"]} />,
-    );
-
-    await fireEvent.click(screen.getByRole("button", { name: "Copy" }));
-
-    await vi.waitFor(() => {
-      expect(writeText).toHaveBeenCalledTimes(1);
-    });
-    expect(writeText.mock.calls[0][0]).toContain("devin auth login");
-    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
-  });
 });

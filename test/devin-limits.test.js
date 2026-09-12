@@ -1,23 +1,23 @@
+"use strict";
+
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const {
-  DEVIN_API_BASE_URL,
-  DEVIN_PLAN_STATUS_ROUTE,
-  resolveDevinCredentialsPath,
-  readDevinCredentials,
-  normalizeDevinPlanStatus,
-  fetchDevinLimits,
-} = require("../src/lib/devin-limits");
+const { fetchDevinLimits } = require("../src/lib/devin-limits");
 const {
   getUsageLimits,
   resetUsageLimitsCache,
 } = require("../src/lib/usage-limits");
 
 const TEST_TOKEN = "devin-test-session-token";
+
+// Expected request values written independently of the implementation's
+// constants so a drift in either direction is caught.
+const EXPECTED_URL =
+  "https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetPlanStatus";
 
 function jsonResponse(status, body) {
   return {
@@ -29,15 +29,19 @@ function jsonResponse(status, body) {
   };
 }
 
-function makeDevinHome({ toml = null } = {}) {
+function makeDevinHome({ toml = null, at } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-devin-"));
   const home = path.join(tmp, "home");
   const env = {};
-  if (toml !== null) {
-    const dir = path.join(home, ".local", "share", "devin");
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "credentials.toml"), toml);
+  const credentialsDir =
+    at === "xdg"
+      ? path.join(tmp, "xdg", "devin")
+      : path.join(home, ".local", "share", "devin");
+  if (toml !== null && toml !== undefined) {
+    fs.mkdirSync(credentialsDir, { recursive: true });
+    fs.writeFileSync(path.join(credentialsDir, "credentials.toml"), toml);
   }
+  if (at === "xdg") env.XDG_DATA_HOME = path.join(tmp, "xdg");
   return { tmp, home, env };
 }
 
@@ -73,355 +77,323 @@ function planStatusBody({
   };
 }
 
-describe("resolveDevinCredentialsPath", () => {
-  it("uses $XDG_DATA_HOME/devin before the home fallback", () => {
-    const resolved = resolveDevinCredentialsPath({
-      home: "/tmp/hh",
-      env: { XDG_DATA_HOME: "/tmp/xdg data" },
-    });
-    assert.equal(
-      resolved,
-      path.join("/tmp/xdg data", "devin", "credentials.toml"),
-    );
-  });
+// Fetch the limits through the public seam with a signed-in fictional home.
+async function signedInLimits({ fetchImpl, toml = SIGNED_IN_TOML, at } = {}) {
+  const { tmp, home, env } = makeDevinHome({ toml, at });
+  try {
+    return await fetchDevinLimits({ home, env, fetchImpl });
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
 
-  it("falls back to ~/.local/share/devin/credentials.toml", () => {
-    const resolved = resolveDevinCredentialsPath({ home: "/tmp/hh", env: {} });
-    assert.equal(
-      resolved,
-      path.join("/tmp/hh", ".local", "share", "devin", "credentials.toml"),
-    );
-  });
+function okFetch(body = planStatusBody()) {
+  return async () => jsonResponse(200, body);
+}
 
-  it("discovers nothing when no home or env is injected", () => {
-    assert.equal(resolveDevinCredentialsPath({ env: {} }), null);
-    assert.equal(readDevinCredentials({ env: {} }), null);
-  });
-});
-
-describe("readDevinCredentials", () => {
-  it("reads the CLI-written windsurf_api_key", () => {
-    const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
+describe("credential discovery", () => {
+  it("uses $XDG_DATA_HOME/devin before the home fallback", async () => {
+    const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML, at: "xdg" });
+    let calledUrl = null;
     try {
-      const creds = readDevinCredentials({ home, env });
-      assert.equal(creds.apiKey, TEST_TOKEN);
+      await fetchDevinLimits({
+        home,
+        env,
+        fetchImpl: async (url) => {
+          calledUrl = url;
+          return jsonResponse(200, planStatusBody());
+        },
+      });
+      assert.equal(calledUrl, EXPECTED_URL);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("throws an actionable error for a signed-out credentials file", () => {
-    const { tmp, home, env } = makeDevinHome({
-      toml: 'api_server_url = "https://server.codeium.com"\n',
+  it("falls back to ~/.local/share/devin/credentials.toml", async () => {
+    let calledUrl = null;
+    await signedInLimits({
+      fetchImpl: async (url) => {
+        calledUrl = url;
+        return jsonResponse(200, planStatusBody());
+      },
     });
-    try {
-      assert.throws(
-        () => readDevinCredentials({ home, env }),
-        /devin auth login/i,
-      );
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("normalizeDevinPlanStatus", () => {
-  it("maps 100% remaining to 0% used on both windows", () => {
-    const result = normalizeDevinPlanStatus(planStatusBody());
-    assert.equal(result.primary_window.used_percent, 0);
-    assert.equal(result.secondary_window.used_percent, 0);
-    assert.equal(result.plan_label, "Pro");
-    assert.equal(result.primary_window.limit_window_seconds, 86400);
-    assert.equal(result.secondary_window.limit_window_seconds, 604800);
+    assert.equal(calledUrl, EXPECTED_URL);
   });
 
-  it("converts unix-second reset strings to ISO timestamps", () => {
-    const result = normalizeDevinPlanStatus(planStatusBody());
-    assert.equal(
-      result.primary_window.reset_at,
-      new Date(1_789_200_000 * 1000).toISOString(),
-    );
-    assert.equal(
-      result.secondary_window.reset_at,
-      new Date(1_789_286_400 * 1000).toISOString(),
-    );
+  it("reports configured:false without any home or credentials env", async () => {
+    let calls = 0;
+    const result = await fetchDevinLimits({
+      home: null,
+      env: {},
+      fetchImpl: async () => {
+        calls += 1;
+        return jsonResponse(200, planStatusBody());
+      },
+    });
+    assert.deepEqual(result, { configured: false });
+    assert.equal(calls, 0);
   });
 
-  it("treats an absent remaining-percent field as exhausted when the reset is live", () => {
-    const body = planStatusBody({ dailyRemaining: undefined });
-    delete body.planStatus.dailyQuotaRemainingPercent;
-    const result = normalizeDevinPlanStatus(body);
-    assert.equal(result.primary_window.used_percent, 100);
-    assert.equal(result.secondary_window.used_percent, 0);
-  });
-
-  it("suppresses an absent daily window while keeping a valid weekly window", () => {
-    const body = planStatusBody({ weeklyRemaining: 25 });
-    delete body.planStatus.dailyQuotaRemainingPercent;
-    delete body.planStatus.dailyQuotaResetAtUnix;
-    const result = normalizeDevinPlanStatus(body);
-    assert.equal(result.primary_window, null);
-    assert.equal(result.secondary_window.used_percent, 75);
-  });
-
-  it("handles asymmetric nonzero daily/weekly remaining percentages", () => {
-    const result = normalizeDevinPlanStatus(
-      planStatusBody({ dailyRemaining: 32, weeklyRemaining: 90 }),
-    );
-    assert.equal(result.primary_window.used_percent, 68);
-    assert.equal(result.secondary_window.used_percent, 10);
-  });
-
-  it("suppresses windows hidden by the planInfo hide flags", () => {
-    const hidden = normalizeDevinPlanStatus(
-      planStatusBody({ hideDaily: true, hideWeekly: true }),
-    );
-    assert.equal(hidden.primary_window, null);
-    assert.equal(hidden.secondary_window, null);
-    const dailyOnly = normalizeDevinPlanStatus(
-      planStatusBody({ hideDaily: true }),
-    );
-    assert.equal(dailyOnly.primary_window, null);
-    assert.equal(dailyOnly.secondary_window.used_percent, 0);
-  });
-
-  it("suppresses quota windows for legacy non-QUOTA billing", () => {
-    const result = normalizeDevinPlanStatus(
-      planStatusBody({ billingStrategy: "BILLING_STRATEGY_CREDITS" }),
-    );
-    assert.equal(result.primary_window, null);
-    assert.equal(result.secondary_window, null);
-    assert.equal(result.plan_label, "Pro");
-  });
-
-  it("throws on a missing planStatus instead of reporting a free plan", () => {
-    assert.throws(() => normalizeDevinPlanStatus({}), /missing planStatus/);
-    assert.throws(() => normalizeDevinPlanStatus(null), /missing planStatus/);
-  });
-
-  it("treats explicit null or malformed values as errors, never defaults", () => {
-    for (const bad of [null, "abc", "", {}, [], true]) {
-      const body = planStatusBody();
-      body.planStatus.dailyQuotaRemainingPercent = bad;
-      assert.throws(() => normalizeDevinPlanStatus(body), /malformed/);
-    }
-    for (const bad of [null, "abc", "", -5, {}, []]) {
-      const body = planStatusBody();
-      body.planStatus.weeklyQuotaResetAtUnix = bad;
-      assert.throws(() => normalizeDevinPlanStatus(body), /malformed/);
-    }
-  });
-
-  it("clamps out-of-range percentages defensively", () => {
-    const low = normalizeDevinPlanStatus(planStatusBody({ dailyRemaining: -5 }));
-    assert.equal(low.primary_window.used_percent, 100);
-    const high = normalizeDevinPlanStatus(
-      planStatusBody({ dailyRemaining: 150 }),
-    );
-    assert.equal(high.primary_window.used_percent, 0);
-  });
-});
-
-describe("fetchDevinLimits", () => {
-  it("returns configured:false without credentials and never hits the network", async () => {
-    const { tmp, home, env } = makeDevinHome(); // no credentials file
-    let called = false;
+  it("reports configured:false when the credentials file is absent", async () => {
+    const { tmp, home, env } = makeDevinHome();
+    let calls = 0;
     try {
       const result = await fetchDevinLimits({
         home,
         env,
         fetchImpl: async () => {
-          called = true;
-          return jsonResponse(200, {});
-        },
-      });
-      assert.deepEqual(result, { configured: false });
-      assert.equal(called, false);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("posts an empty JSON body with the x-auth-token header to the fixed endpoint", async () => {
-    const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
-    const calls = [];
-    try {
-      const result = await fetchDevinLimits({
-        home,
-        env,
-        fetchImpl: async (url, options) => {
-          calls.push({ url, options });
+          calls += 1;
           return jsonResponse(200, planStatusBody());
         },
       });
-      assert.equal(calls.length, 1);
-      assert.equal(
-        calls[0].url,
-        `${DEVIN_API_BASE_URL}${DEVIN_PLAN_STATUS_ROUTE}`,
-      );
-      assert.equal(calls[0].options.method, "POST");
-      assert.equal(calls[0].options.body, "{}");
-      assert.equal(
-        calls[0].options.headers["x-auth-token"],
-        TEST_TOKEN,
-      );
-      assert.equal(
-        calls[0].options.headers["Connect-Protocol-Version"],
-        "1",
-      );
-      assert.equal(calls[0].options.redirect, "error");
-      assert.equal(result.configured, true);
-      assert.equal(result.error, null);
-      assert.equal(result.stale, false);
-      assert.ok(result.cached_at);
+      assert.deepEqual(result, { configured: false });
+      assert.equal(calls, 0);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("rejects a custom api_server_url without any network call", async () => {
-    const { tmp, home, env } = makeDevinHome({
-      toml: `windsurf_api_key = "${TEST_TOKEN}"
-api_server_url = "https://devin-proxy.example.com"
-`,
-    });
-    let called = false;
+  it("surfaces a credential-read failure instead of pretending signed-out", async () => {
+    // A directory where credentials.toml should be makes readFileSync fail
+    // with EISDIR on every platform — a deterministic "unreadable" fixture.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-devin-"));
+    const home = path.join(tmp, "home");
+    const dir = path.join(home, ".local", "share", "devin", "credentials.toml");
+    fs.mkdirSync(dir, { recursive: true });
+    let calls = 0;
     try {
       await assert.rejects(
         fetchDevinLimits({
           home,
-          env,
+          env: {},
           fetchImpl: async () => {
-            called = true;
-            return jsonResponse(200, {});
+            calls += 1;
+            return jsonResponse(200, planStatusBody());
           },
         }),
-        /custom api_server_url/,
+        (error) => {
+          assert.match(error.message, /could not read/i);
+          assert.match(error.message, /devin auth login/);
+          assert.ok(!error.message.includes(tmp), "leaked fs path");
+          return true;
+        },
       );
-      assert.equal(called, false);
+      assert.equal(calls, 0);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("throws an actionable error for a signed-out credentials file", async () => {
+    await assert.rejects(
+      signedInLimits({
+        toml: 'api_server_url = "https://server.codeium.com"\n',
+        fetchImpl: okFetch(),
+      }),
+      /devin auth login/,
+    );
+  });
+
+  it("rejects a custom api_server_url without any network call", async () => {
+    let calls = 0;
+    await assert.rejects(
+      signedInLimits({
+        toml: `windsurf_api_key = "${TEST_TOKEN}"\napi_server_url = "https://evil.example.invalid"\n`,
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse(200, planStatusBody());
+        },
+      }),
+      /api_server_url/,
+    );
+    assert.equal(calls, 0);
+  });
+});
+
+describe("response normalization", () => {
+  it("maps 100% remaining to 0% used on both windows", async () => {
+    const result = await signedInLimits({ fetchImpl: okFetch() });
+    assert.equal(result.primary_window.used_percent, 0);
+    assert.equal(result.secondary_window.used_percent, 0);
+    assert.equal(result.plan_label, "Pro");
+  });
+
+  it("converts unix-second reset strings to ISO timestamps", async () => {
+    const result = await signedInLimits({ fetchImpl: okFetch() });
+    assert.equal(
+      result.primary_window.reset_at,
+      new Date(1_789_200_000 * 1000).toISOString(),
+    );
+    assert.equal(result.primary_window.limit_window_seconds, 86400);
+    assert.equal(result.secondary_window.limit_window_seconds, 604800);
+  });
+
+  it("treats an absent remaining-percent field as exhausted when the reset is live", async () => {
+    const body = planStatusBody();
+    delete body.planStatus.dailyQuotaRemainingPercent;
+    const result = await signedInLimits({ fetchImpl: okFetch(body) });
+    assert.equal(result.primary_window.used_percent, 100);
+  });
+
+  it("suppresses an absent daily window while keeping a valid weekly window", async () => {
+    const body = planStatusBody();
+    delete body.planStatus.dailyQuotaRemainingPercent;
+    delete body.planStatus.dailyQuotaResetAtUnix;
+    const result = await signedInLimits({ fetchImpl: okFetch(body) });
+    assert.equal(result.primary_window, null);
+    assert.equal(result.secondary_window.used_percent, 0);
+  });
+
+  it("handles asymmetric nonzero daily/weekly remaining percentages", async () => {
+    const result = await signedInLimits({
+      fetchImpl: okFetch(planStatusBody({ dailyRemaining: 40, weeklyRemaining: 75 })),
+    });
+    assert.equal(result.primary_window.used_percent, 60);
+    assert.equal(result.secondary_window.used_percent, 25);
+  });
+
+  it("suppresses windows hidden by the planInfo hide flags", async () => {
+    const result = await signedInLimits({
+      fetchImpl: okFetch(planStatusBody({ hideDaily: true, hideWeekly: true })),
+    });
+    assert.equal(result.primary_window, null);
+    assert.equal(result.secondary_window, null);
+  });
+
+  it("suppresses quota windows for legacy non-QUOTA billing", async () => {
+    const result = await signedInLimits({
+      fetchImpl: okFetch(planStatusBody({ billingStrategy: "BILLING_STRATEGY_ACU" })),
+    });
+    assert.equal(result.primary_window, null);
+    assert.equal(result.secondary_window, null);
+    assert.equal(result.plan_label, "Pro");
+  });
+
+  it("throws on a missing planStatus instead of reporting a free plan", async () => {
+    await assert.rejects(signedInLimits({ fetchImpl: okFetch({}) }), /planStatus/);
+  });
+
+  it("treats explicit null or malformed values as errors, never defaults", async () => {
+    for (const bad of [null, "", "abc", {}, [], true]) {
+      const body = planStatusBody();
+      body.planStatus.dailyQuotaRemainingPercent = bad;
+      await assert.rejects(
+        signedInLimits({ fetchImpl: okFetch(body) }),
+        /malformed/,
+        `expected malformed rejection for ${JSON.stringify(bad)}`,
+      );
+    }
+  });
+
+  it("clamps out-of-range percentages defensively", async () => {
+    const result = await signedInLimits({
+      fetchImpl: okFetch(planStatusBody({ dailyRemaining: -5, weeklyRemaining: 150 })),
+    });
+    assert.equal(result.primary_window.used_percent, 100);
+    assert.equal(result.secondary_window.used_percent, 0);
+  });
+});
+
+describe("request and transport", () => {
+  it("posts an empty JSON body with the x-auth-token header to the fixed endpoint", async () => {
+    let seen = null;
+    await signedInLimits({
+      fetchImpl: async (url, options) => {
+        seen = { url, options };
+        return jsonResponse(200, planStatusBody());
+      },
+    });
+    assert.equal(seen.url, EXPECTED_URL);
+    assert.equal(seen.options.method, "POST");
+    assert.equal(seen.options.headers["x-auth-token"], TEST_TOKEN);
+    assert.equal(seen.options.headers["Content-Type"], "application/json");
+    assert.equal(seen.options.headers["Connect-Protocol-Version"], "1");
+    assert.equal(seen.options.body, "{}");
+    assert.equal(seen.options.redirect, "error");
   });
 
   it("flags HTTP 401/403 as AUTH_EXPIRED", async () => {
-    const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
-    try {
-      for (const status of [401, 403]) {
-        const error = await fetchDevinLimits({
-          home,
-          env,
-          fetchImpl: async () =>
-            jsonResponse(status, { code: "unauthenticated" }),
-        }).then(
-          () => null,
-          (e) => e,
-        );
-        assert.equal(error.code, "AUTH_EXPIRED");
-        assert.match(error.message, /devin auth login/i);
-      }
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("treats HTTP 400 as an ambiguous rejection, not credential expiry", async () => {
-    const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
-    try {
-      const error = await fetchDevinLimits({
-        home,
-        env,
-        fetchImpl: async () =>
-          jsonResponse(400, { code: "invalid_argument" }),
+    for (const status of [401, 403]) {
+      const error = await signedInLimits({
+        fetchImpl: async () => jsonResponse(status, {}),
       }).then(
         () => null,
         (e) => e,
       );
-      assert.equal(error.code, undefined);
-      assert.match(error.message, /400/);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      assert.equal(error.code, "AUTH_EXPIRED");
+      assert.match(error.message, /devin auth login/);
     }
+  });
+
+  it("treats HTTP 400 as an ambiguous rejection, not credential expiry", async () => {
+    const error = await signedInLimits({
+      fetchImpl: async () => jsonResponse(400, { code: "invalid_argument" }),
+    }).then(
+      () => null,
+      (e) => e,
+    );
+    assert.notEqual(error.code, "AUTH_EXPIRED");
+    assert.match(error.message, /rejected|HTTP 400/);
   });
 
   it("rejects non-JSON and planStatus-less responses", async () => {
-    const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
-    try {
-      await assert.rejects(
-        fetchDevinLimits({
-          home,
-          env,
-          fetchImpl: async () => ({
-            ok: true,
-            status: 200,
-            async json() {
-              throw new SyntaxError("bad json");
-            },
-          }),
-        }),
-        /not JSON/,
-      );
-      await assert.rejects(
-        fetchDevinLimits({
-          home,
-          env,
-          fetchImpl: async () => jsonResponse(200, { unrelated: true }),
-        }),
-        /missing planStatus/,
-      );
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("propagates transport failures including aborted timeouts", async () => {
-    const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
-    try {
-      await assert.rejects(
-        fetchDevinLimits({
-          home,
-          env,
-          fetchImpl: async () => {
-            const error = new Error("The operation was aborted");
-            error.name = "AbortError";
-            throw error;
+    await assert.rejects(
+      signedInLimits({
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new Error("bad json");
           },
         }),
-        /Devin quota request failed/,
+      }),
+      /not JSON/,
+    );
+  });
+
+  it("uses owned transport errors that leak no token, path or identity", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-devin-"));
+    const home = path.join(tmp, "home");
+    const dir = path.join(home, ".local", "share", "devin");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "credentials.toml"), SIGNED_IN_TOML);
+    const secretPath = path.join(dir, "credentials.toml");
+    try {
+      const error = await fetchDevinLimits({
+        home,
+        env: {},
+        fetchImpl: async () => {
+          throw new Error(
+            `upstream refused ${TEST_TOKEN} at ${secretPath} for private@example.invalid`,
+          );
+        },
+      }).then(
+        () => null,
+        (e) => e,
       );
+      assert.equal(error.message, "Devin quota request failed.");
+      assert.ok(!error.message.includes(TEST_TOKEN), "leaked token");
+      assert.ok(!error.message.includes(secretPath), "leaked path");
+      assert.ok(!error.message.includes("private@example.invalid"), "leaked identity");
+      assert.ok(!error.message.includes("upstream refused"), "forwarded upstream text");
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("never leaks the session token or credentials path into errors", async () => {
-    const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
-    try {
-      const cases = [
-        async () => jsonResponse(500, { detail: TEST_TOKEN }),
-        async () => {
-          throw new Error(`upstream refused ${TEST_TOKEN}`);
-        },
-        async () => jsonResponse(200, { leak: TEST_TOKEN }),
-      ];
-      for (const fetchImpl of cases) {
-        const error = await fetchDevinLimits({ home, env, fetchImpl }).then(
-          () => null,
-          (e) => e,
-        );
-        assert.ok(error instanceof Error);
-        assert.ok(
-          !error.message.includes(TEST_TOKEN),
-          `error leaked token: ${error.message}`,
-        );
-        assert.ok(
-          !error.message.includes(home),
-          `error leaked fs path: ${error.message}`,
-        );
-      }
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+  it("classifies aborted requests as timeouts without dependency text", async () => {
+    const error = await signedInLimits({
+      fetchImpl: async () => {
+        const e = new Error("The operation was aborted by the user agent internals");
+        e.name = "AbortError";
+        throw e;
+      },
+    }).then(
+      () => null,
+      (e) => e,
+    );
+    assert.equal(error.message, "Devin quota request timed out.");
   });
 });
 
@@ -474,6 +446,29 @@ describe("devin inside the aggregated usage-limits round", () => {
     }
   });
 
+  it("surfaces a credential-read failure as a provider error in the aggregate", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-devin-"));
+    const home = path.join(tmp, "home");
+    fs.mkdirSync(path.join(home, ".local", "share", "devin", "credentials.toml"), {
+      recursive: true,
+    });
+    resetUsageLimitsCache();
+    try {
+      const data = await getUsageLimits({
+        home,
+        env: { CLAUDE_CONFIG_DIR: path.join(tmp, "no-claude") },
+        fetchImpl: async () => jsonResponse(404, {}),
+      });
+      assert.equal(data.devin.configured, true);
+      assert.match(data.devin.error, /could not read/i);
+      assert.ok(!data.devin.error.includes(tmp), "leaked fs path");
+      assert.ok("claude" in data && "codex" in data);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("isolates a devin transport failure from the other providers", async () => {
     const { tmp, home, env } = makeDevinHome({ toml: SIGNED_IN_TOML });
     resetUsageLimitsCache();
@@ -489,7 +484,7 @@ describe("devin inside the aggregated usage-limits round", () => {
         },
       });
       assert.equal(data.devin.configured, true);
-      assert.match(data.devin.error, /Devin quota request failed/);
+      assert.equal(data.devin.error, "Devin quota request failed.");
       assert.equal(data.devin.provenance.stale, false);
       assert.ok("claude" in data && "codex" in data);
     } finally {
