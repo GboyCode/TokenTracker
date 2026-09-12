@@ -705,3 +705,48 @@ extension UsageLimitsResponse {
         )
     }
 }
+
+/// Latest-request authority for usage-limits publications. Every refresh takes
+/// a ticket when it starts and a Devin selection transition invalidates every
+/// outstanding ticket immediately — even before the replacement refresh has
+/// begun. Only the newest ticket may publish, so a late response fetched under
+/// a superseded selection (including on→off→on cycles) can never overwrite the
+/// display record, the disk cache, reset detection or boundary scheduling.
+struct UsageLimitsPublicationAuthority {
+    private var generation = 0
+
+    /// Ticket identifying a new refresh. Overlapping same-selection requests
+    /// resolve latest-wins because every begin supersedes the previous ticket.
+    mutating func beginRequest() -> Int {
+        generation += 1
+        return generation
+    }
+
+    /// A selection transition supersedes in-flight work before its replacement
+    /// refresh has even started.
+    mutating func invalidateForSelectionChange() {
+        generation += 1
+    }
+
+    /// `ticket` still owns the publication right only while no newer refresh
+    /// or selection change has superseded it.
+    func isCurrent(_ ticket: Int) -> Bool {
+        ticket == generation
+    }
+
+    /// The publication decision every completed refresh must pass: superseded
+    /// work returns nil and may not touch display, cache, reset detection or
+    /// scheduling; current work returns the display record — incoming unless
+    /// it carries no usable provider while a good record exists — with Devin
+    /// rows rewritten when the selection is off.
+    func publish(
+        ticket: Int,
+        incoming: UsageLimitsResponse,
+        devinSelected: Bool,
+        current: UsageLimitsResponse?
+    ) -> UsageLimitsResponse? {
+        guard isCurrent(ticket) else { return nil }
+        return UsageLimitsResponse.displayRecord(current: current, incoming: incoming)
+            .applyingDevinSelection(devinSelected)
+    }
+}

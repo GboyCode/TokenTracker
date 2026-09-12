@@ -1401,14 +1401,22 @@ test("usage-limits honors devin=1 only on locally authenticated requests", async
   const originalGet = usageLimits.getUsageLimits;
   const originalReset = usageLimits.resetUsageLimitsCache;
   const forwarded = [];
+  let aggregateCalls = 0;
+  let cacheResets = 0;
   usageLimits.getUsageLimits = async (options) => {
+    aggregateCalls += 1;
     forwarded.push(options);
     return { fetched_at: "2026-01-01T00:00:00Z", devin: { configured: false } };
   };
-  usageLimits.resetUsageLimitsCache = () => {};
+  usageLimits.resetUsageLimitsCache = () => {
+    cacheResets += 1;
+  };
 
-  async function requestLimits({ devin, token } = {}) {
-    const query = devin ? `?devin=${devin}` : "";
+  async function requestLimits({ devin, token, refresh } = {}) {
+    const params = new URLSearchParams();
+    if (devin) params.set("devin", devin);
+    if (refresh) params.set("refresh", refresh);
+    const query = params.size ? `?${params}` : "";
     const headers = token ? { "x-tokentracker-local-auth": token } : {};
     const req = createRequest({ method: "GET", headers });
     const res = createResponse();
@@ -1418,7 +1426,6 @@ test("usage-limits honors devin=1 only on locally authenticated requests", async
       new URL(`http://127.0.0.1/functions/tokentracker-usage-limits${query}`),
     );
     assert.equal(handled, true);
-    assert.equal(res.statusCode, 200);
     return res;
   }
 
@@ -1428,17 +1435,28 @@ test("usage-limits honors devin=1 only on locally authenticated requests", async
   try {
     const localAuthToken = await getLocalAuthToken(handler);
 
-    await requestLimits({ devin: "1" });
-    assert.equal(forwarded.at(-1).devinEnabled, false, "bare devin=1 must not enable");
+    // An explicit opt-in without local auth is rejected outright — before any
+    // cache reset or aggregate work, so nothing downstream can misreport the
+    // enabled client as a disabled provider.
+    for (const token of [undefined, "wrong-token"]) {
+      const res = await requestLimits({ devin: "1", refresh: "1", token });
+      assert.equal(res.statusCode, 401, `devin=1 with token=${token} must 401`);
+      assert.deepEqual(JSON.parse(res.body.toString("utf8")), { error: "Unauthorized" });
+    }
+    assert.equal(aggregateCalls, 0, "unauthorized opt-in reached the aggregate");
+    assert.equal(cacheResets, 0, "unauthorized opt-in reset the limits cache");
 
-    await requestLimits({ devin: "1", token: "wrong-token" });
-    assert.equal(forwarded.at(-1).devinEnabled, false, "bad token must not enable");
-
-    await requestLimits({ devin: "1", token: localAuthToken });
+    const ok = await requestLimits({ devin: "1", token: localAuthToken });
+    assert.equal(ok.statusCode, 200);
     assert.equal(forwarded.at(-1).devinEnabled, true, "authenticated opt-in forwards enabled");
 
-    await requestLimits({ token: localAuthToken });
-    assert.equal(forwarded.at(-1).devinEnabled, false, "authenticated request without opt-in stays off");
+    // Ordinary requests — with or without local auth but no devin flag — keep
+    // their previous behavior.
+    for (const token of [localAuthToken, undefined]) {
+      const res = await requestLimits({ token });
+      assert.equal(res.statusCode, 200);
+      assert.equal(forwarded.at(-1).devinEnabled, false, `token=${token} without opt-in stays off`);
+    }
   } finally {
     usageLimits.getUsageLimits = originalGet;
     usageLimits.resetUsageLimitsCache = originalReset;

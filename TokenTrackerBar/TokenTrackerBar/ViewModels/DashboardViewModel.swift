@@ -95,6 +95,11 @@ class DashboardViewModel: ObservableObject {
     /// Wi-Fi/VPN comes back a second or two after the app starts refreshing.
     private static let accountRecoveryDelays: [TimeInterval] = [1, 3, 10]
     private let resetDetector = WeeklyLimitResetDetector()
+    /// Publication authority for usage-limits refreshes: only the newest
+    /// request may update the published record, disk cache, reset detection
+    /// and boundary scheduling; a Devin selection transition supersedes every
+    /// outstanding request.
+    private var limitsPublicationAuthority = UsageLimitsPublicationAuthority()
     private var cancellables = Set<AnyCancellable>()
     /// Last seen Devin provider-switch state — lets the settings observer react
     /// only to Devin transitions even though `.nativeSettingsChanged` fires for
@@ -937,6 +942,7 @@ class DashboardViewModel: ObservableObject {
         let selected = LimitsSettingsStore.shared.isVisible("devin")
         guard selected != lastDevinSelection else { return }
         lastDevinSelection = selected
+        limitsPublicationAuthority.invalidateForSelectionChange()
         if let current = usageLimits {
             let adjusted = current.applyingDevinSelection(selected)
             if adjusted != current {
@@ -955,24 +961,32 @@ class DashboardViewModel: ObservableObject {
     /// all-error response); per-provider errors inside an otherwise-usable
     /// response are still respected by the view (those providers are hidden).
     private func refreshUsageLimits() async {
+        let issued = limitsPublicationAuthority.beginRequest()
         do {
             let selected = LimitsSettingsStore.shared.isVisible("devin")
             let fetched = try await APIClient.shared.fetchUsageLimits(devinEnabled: selected)
-            // Re-read the selection after the await: a request issued while the
-            // switch was on must not republish Devin rows after the user turned
-            // it off mid-flight.
-            let newLimits = fetched.applyingDevinSelection(LimitsSettingsStore.shared.isVisible("devin"))
-            self.usageLimits = UsageLimitsResponse.displayRecord(
-                current: self.usageLimits,
-                incoming: newLimits
-            ).applyingDevinSelection(LimitsSettingsStore.shared.isVisible("devin"))
-            UsageLimitsCache.save(newLimits)
+            // Only the newest request may publish. A response fetched under a
+            // superseded Devin selection is dropped here — before it can reach
+            // the display record, the disk cache or reset detection — and its
+            // Devin rows are still rewritten when the selection is now off.
+            guard let published = limitsPublicationAuthority.publish(
+                ticket: issued,
+                incoming: fetched,
+                devinSelected: LimitsSettingsStore.shared.isVisible("devin"),
+                current: self.usageLimits
+            ) else { return }
+            self.usageLimits = published
+            UsageLimitsCache.save(published)
             self.detectLimitResets(in: self.usageLimits)
         } catch {
             // Non-fatal: usage limits are best-effort, don't replace the last good record.
             Self.logger.error("Usage limits refresh failed: \(error.localizedDescription, privacy: .public)")
         }
-        scheduleResetBoundaryRefresh(for: usageLimits)
+        // Reschedule only from the authoritative completion — a superseded
+        // request leaves boundary scheduling to its replacement.
+        if limitsPublicationAuthority.isCurrent(issued) {
+            scheduleResetBoundaryRefresh(for: usageLimits)
+        }
     }
 
     private func refreshSubscriptions() async {

@@ -54,8 +54,8 @@ test("macOS usage-limits hydrates the last good record before refreshing", () =>
   );
   assert.match(
     source,
-    /APIClient\.shared\.fetchUsageLimits\(devinEnabled: selected\)[\s\S]*UsageLimitsCache\.save\(newLimits\)/,
-    "A successful background refresh should persist the selection-adjusted replacement record.",
+    /APIClient\.shared\.fetchUsageLimits\(devinEnabled: selected\)[\s\S]*limitsPublicationAuthority\.publish\([\s\S]*UsageLimitsCache\.save\(published\)/,
+    "A successful background refresh should persist the authoritative published record — a response issued under a superseded Devin selection never reaches the cache.",
   );
 });
 

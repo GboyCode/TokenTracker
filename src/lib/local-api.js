@@ -3215,19 +3215,21 @@ function createLocalApiHandler({ queuePath }) {
     if (p === "/functions/tokentracker-usage-limits") {
       const { getUsageLimits, resetUsageLimitsCache } = require("./usage-limits");
       try {
+        // Devin quota is opt-in (Settings > Usage & Limits > Providers). An
+        // explicit devin=1 without local authentication is rejected before any
+        // cache reset or provider work — silently downgrading it to a disabled
+        // response would misreport an enabled client as a disabled provider.
+        const devinParam = url.searchParams.get("devin");
+        const devinEnabled = devinParam === "1" || devinParam === "true";
+        if (devinEnabled && !isAuthorizedLocalMutation(req)) {
+          json(res, { error: "Unauthorized" }, 401);
+          return true;
+        }
         const refreshParam = url.searchParams.get("refresh");
         const forceRefresh = refreshParam === "1" || refreshParam === "true";
         if (forceRefresh) {
           resetUsageLimitsCache();
         }
-        // Devin quota is opt-in (Settings > Usage & Limits > Providers). The
-        // `devin=1` flag is honored only on locally authenticated requests —
-        // a bare opt-in from an unauthenticated caller is ignored, so it can
-        // never cause Devin credentials to be read or the RPC to fire.
-        const devinParam = url.searchParams.get("devin");
-        const devinEnabled =
-          (devinParam === "1" || devinParam === "true") &&
-          isAuthorizedLocalMutation(req);
         const data = await getUsageLimits({
           home: os.homedir(),
           env: process.env,
