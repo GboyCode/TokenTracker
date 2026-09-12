@@ -3219,9 +3219,12 @@ function createLocalApiHandler({ queuePath }) {
         // explicit devin=1 without local authentication is rejected before any
         // cache reset or provider work — silently downgrading it to a disabled
         // response would misreport an enabled client as a disabled provider.
+        // Authorization is evaluated unconditionally so the check never depends
+        // on the user-controlled opt-in flag itself.
+        const localAuthorized = isAuthorizedLocalMutation(req);
         const devinParam = url.searchParams.get("devin");
         const devinEnabled = devinParam === "1" || devinParam === "true";
-        if (devinEnabled && !isAuthorizedLocalMutation(req)) {
+        if (devinEnabled && !localAuthorized) {
           json(res, { error: "Unauthorized" }, 401);
           return true;
         }

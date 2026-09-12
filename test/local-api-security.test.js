@@ -1412,12 +1412,14 @@ test("usage-limits honors devin=1 only on locally authenticated requests", async
     cacheResets += 1;
   };
 
-  async function requestLimits({ devin, token, refresh } = {}) {
+  async function requestLimits({ devin, token, refresh, origin } = {}) {
     const params = new URLSearchParams();
     if (devin) params.set("devin", devin);
     if (refresh) params.set("refresh", refresh);
     const query = params.size ? `?${params}` : "";
-    const headers = token ? { "x-tokentracker-local-auth": token } : {};
+    const headers = {};
+    if (token) headers["x-tokentracker-local-auth"] = token;
+    if (origin) headers.origin = origin;
     const req = createRequest({ method: "GET", headers });
     const res = createResponse();
     const handled = await handler(
@@ -1443,12 +1445,33 @@ test("usage-limits honors devin=1 only on locally authenticated requests", async
       assert.equal(res.statusCode, 401, `devin=1 with token=${token} must 401`);
       assert.deepEqual(JSON.parse(res.body.toString("utf8")), { error: "Unauthorized" });
     }
+    // The devin=true alias is the same opt-in: rejected without auth, and a
+    // valid token from a non-loopback origin fails the check all the same.
+    const trueUnauthed = await requestLimits({ devin: "true" });
+    assert.equal(trueUnauthed.statusCode, 401, "devin=true without auth must 401");
+    const badOrigin = await requestLimits({
+      devin: "1",
+      token: localAuthToken,
+      origin: "https://evil.example",
+    });
+    assert.equal(badOrigin.statusCode, 401, "devin=1 from a foreign origin must 401");
     assert.equal(aggregateCalls, 0, "unauthorized opt-in reached the aggregate");
     assert.equal(cacheResets, 0, "unauthorized opt-in reset the limits cache");
 
     const ok = await requestLimits({ devin: "1", token: localAuthToken });
     assert.equal(ok.statusCode, 200);
     assert.equal(forwarded.at(-1).devinEnabled, true, "authenticated opt-in forwards enabled");
+
+    const trueOk = await requestLimits({ devin: "true", token: localAuthToken });
+    assert.equal(trueOk.statusCode, 200);
+    assert.equal(forwarded.at(-1).devinEnabled, true, "devin=true with auth forwards enabled");
+
+    // devin=0/false are absent opt-ins: no auth needed, provider stays off.
+    for (const devin of ["0", "false"]) {
+      const res = await requestLimits({ devin });
+      assert.equal(res.statusCode, 200, `devin=${devin} must not require auth`);
+      assert.equal(forwarded.at(-1).devinEnabled, false, `devin=${devin} stays off`);
+    }
 
     // Ordinary requests — with or without local auth but no devin flag — keep
     // their previous behavior.
