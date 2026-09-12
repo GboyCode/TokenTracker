@@ -12929,7 +12929,8 @@ async function parseAnythingllmIncremental({
 // so deleting the original node while a fork copy survives never migrates its
 // spend or refunds its conversation. A fork made only of copies pays nothing;
 // the first genuinely new request in a session pays its single
-// conversation_count once via cursors.devin.conversations.
+// conversation_count once — the set of sessions that already paid is derived
+// from the ledger entries themselves, not persisted separately.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DEVIN_SOURCE = "devin";
@@ -13027,14 +13028,10 @@ async function parseDevinIncremental({
   const priorState =
     cursors.devin && typeof cursors.devin === "object" ? cursors.devin : {};
   const requests = devinStringMap(priorState.requests);
-  const countedConversations = devinStringMap(priorState.conversations);
   if (!resolvedDb || !fssync.existsSync(resolvedDb)) {
-    cursors.devin = {
-      ...priorState,
-      requests,
-      conversations: countedConversations,
-      updatedAt: new Date().toISOString(),
-    };
+    const nextState = { ...priorState, requests, updatedAt: new Date().toISOString() };
+    delete nextState.conversations;
+    cursors.devin = nextState;
     return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
   }
 
@@ -13068,6 +13065,21 @@ async function parseDevinIncremental({
   const projectContextBySession = projectEnabled ? new Map() : null;
   const cb = typeof onProgress === "function" ? onProgress : null;
   let eventsAggregated = 0;
+
+  // The counted-conversation index is derived from the retained ledger: the
+  // entry that paid a conversation's +1 keeps that share in its own totals,
+  // even after every copy of the request vanished — no second persisted map.
+  const countedConversations = new Set();
+  for (const [requestId, entry] of Object.entries(requests)) {
+    const totals = entry && typeof entry === "object" ? entry.totals : null;
+    if (totals && Number.isSafeInteger(totals.conversation_count) && totals.conversation_count >= 1) {
+      countedConversations.add(
+        typeof entry.sessionId === "string" && entry.sessionId
+          ? entry.sessionId
+          : `request:${requestId}`,
+      );
+    }
+  }
 
   for (let index = 0; index < events.length; index++) {
     const event = events[index];
@@ -13112,11 +13124,11 @@ async function parseDevinIncremental({
       // A fork made only of copied requests pays no conversation of its own;
       // the first genuinely new request in a conversation pays it once.
       const convKey = event.sessionId || `request:${event.requestId}`;
-      if (countedConversations[convKey] != null) {
+      if (countedConversations.has(convKey)) {
         event.totals.conversation_count = 0;
       } else {
         event.totals.conversation_count = 1;
-        countedConversations[convKey] = event.requestId;
+        countedConversations.add(convKey);
       }
     }
 
@@ -13218,7 +13230,6 @@ async function parseDevinIncremental({
   cursors.devin = {
     version: 1,
     requests,
-    conversations: countedConversations,
     fingerprint: sameSqliteFingerprint(initialFingerprint, finalFingerprint)
       ? finalFingerprint
       : initialFingerprint,
