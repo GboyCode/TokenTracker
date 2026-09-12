@@ -25,6 +25,7 @@ const {
   readDevinUsageRows,
   parseDevinIncremental,
 } = require("../src/lib/rollout");
+const { mockPlatform } = require("./helpers/mock");
 
 function executeSql(dbPath, sql) {
   if (typeof DatabaseSync === "function") {
@@ -46,10 +47,12 @@ function quote(value) {
 // Mirrors the verified devin CLI 3000.10.21 schema: sessions.created_at is a
 // Unix-seconds INTEGER, message_nodes.row_id is the INTEGER PRIMARY KEY and
 // node.created_at is Unix seconds (clone persistence time, not call time).
-function createDevinDb({ dir } = {}) {
+// `sessions: false` reproduces older databases that lack the sessions table.
+function createDevinDb({ dir, sessions = true } = {}) {
   const root = dir || fs.mkdtempSync(path.join(os.tmpdir(), "devin-test-"));
   const dbPath = path.join(root, "sessions.db");
   executeSql(dbPath, `
+    ${sessions ? `
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
       working_directory TEXT,
@@ -65,7 +68,7 @@ function createDevinDb({ dir } = {}) {
       workspace_dirs TEXT,
       hidden INTEGER,
       metadata TEXT
-    );
+    );` : ""}
     CREATE TABLE message_nodes (
       row_id INTEGER PRIMARY KEY,
       session_id TEXT,
@@ -186,11 +189,22 @@ function makeGitRepo(dir, remoteUrl = "https://github.com/acme/widgets.git") {
   return dir;
 }
 
-test("Devin resolver honors override, XDG_DATA_HOME and HOME", () => {
+test("Devin resolver honors the explicit database override on every platform", (t) => {
   assert.equal(
     resolveDevinDbPath({ TOKENTRACKER_DEVIN_DB: " /tmp/custom-devin.db " }),
     path.resolve("/tmp/custom-devin.db"),
   );
+  mockPlatform(t, "win32");
+  assert.equal(
+    resolveDevinDbPath({ TOKENTRACKER_DEVIN_DB: "D:\\dev\\sessions.db" }),
+    path.resolve("D:\\dev\\sessions.db"),
+  );
+});
+
+test("Devin resolver resolves the POSIX data directory", (t) => {
+  // POSIX-only expectations behind an explicit simulated platform so the
+  // assertions stay meaningful when the suite runs on Windows.
+  mockPlatform(t, "linux");
   assert.equal(
     resolveDevinDbPath({ XDG_DATA_HOME: "/tmp/xdg", HOME: "/home/test" }),
     path.join("/tmp/xdg", "devin", "cli", "sessions.db"),
@@ -199,6 +213,45 @@ test("Devin resolver honors override, XDG_DATA_HOME and HOME", () => {
     resolveDevinDbPath({ HOME: "/home/test" }),
     path.join("/home/test", ".local", "share", "devin", "cli", "sessions.db"),
   );
+});
+
+test("Devin resolver on win32 discovers only a WSL install", (t) => {
+  mockPlatform(t, "win32");
+  const env = { HOME: "C:\\Users\\tester", USERPROFILE: "C:\\Users\\tester" };
+
+  // No native Devin data dir exists; with no WSL distros the answer is null
+  // (never a guessed native path).
+  assert.equal(
+    resolveDevinDbPath(env, { runWsl: () => "", existsSync: () => false }),
+    null,
+  );
+
+  // A supported WSL mode resolves to the discovered WSL file only.
+  const wslCalls = [];
+  const runWsl = (args) => {
+    wslCalls.push(args);
+    if (args[0] === "-l") return "  NAME           STATE      VERSION\n* Ubuntu-24.04   Running    2\n";
+    if (args[0] === "-d") return "tester\n";
+    return "";
+  };
+  const existsSync = (p) => typeof p === "string" && p.startsWith("\\\\wsl$\\Ubuntu-24.04\\");
+  const resolved = resolveDevinDbPath(env, { runWsl, existsSync });
+  assert.equal(
+    resolved,
+    path.join("\\\\wsl$\\Ubuntu-24.04\\home\\tester\\.local/share/devin/cli", "sessions.db"),
+  );
+  assert.match(resolved, /^\\\\wsl\$\\Ubuntu-24\.04\\/);
+
+  // native-only mode must not probe WSL at all.
+  wslCalls.length = 0;
+  assert.equal(
+    resolveDevinDbPath(
+      { ...env, TOKENTRACKER_WSL_MODE: "native-only" },
+      { runWsl, existsSync },
+    ),
+    null,
+  );
+  assert.deepEqual(wslCalls, [], "native-only must not run any wsl.exe probe");
 });
 
 sqliteTest("Devin SQL projection never selects message bodies or session cogs", async () => {
@@ -248,6 +301,56 @@ sqliteTest("Devin SQL projection never selects message bodies or session cogs", 
     assert.equal(rows[0].input_tokens, 100);
     assert.equal(rows[0].cache_read_tokens, 400);
     assert.equal(rows[0].cache_creation_tokens, 5);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+sqliteTest("Devin projection degrades cleanly without a sessions table", async () => {
+  const { dir, dbPath } = createDevinDb({ sessions: false });
+  try {
+    insertNode(dbPath, {
+      rowId: 1,
+      sessionId: "s-orphan",
+      nodeId: 1,
+      chatMessage: devinAssistantMessage({
+        requestId: "req-less",
+        model: "compactor",
+        startedAt: "2026-01-06T09:15:30.000Z",
+        input: 42,
+        output: 7,
+        cacheRead: 300,
+        cacheCreation: 9,
+      }),
+      createdAt: 1783620000,
+    });
+
+    const rows = await readDevinUsageRows(dbPath);
+    assert.equal(rows.length, 1);
+    const row = rows[0];
+    // Exact scalar projection — no session join columns, no message bodies.
+    assert.equal(row.request_id, "req-less");
+    assert.equal(row.generation_model, "compactor");
+    assert.equal(row.started_generation_at, "2026-01-06T09:15:30.000Z");
+    assert.equal(row.input_tokens, 42);
+    assert.equal(row.output_tokens, 7);
+    assert.equal(row.cache_read_tokens, 300);
+    assert.equal(row.cache_creation_tokens, 9);
+    assert.equal(row.session_id, "s-orphan");
+    assert.equal(row.session_created_at, null);
+    assert.equal(row.working_directory, null);
+    const serialized = JSON.stringify(rows);
+    assert.doesNotMatch(serialized, /PRIVATE|cogs|chat_message|content/i);
+
+    // The event path also works: the row still counts once with the original
+    // generation time and recorded model.
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursors = {};
+    await parseDevinIncremental({ dbPath, cursors, queuePath });
+    const buckets = latestBuckets(queuePath);
+    const bucket = buckets.get("devin|compactor|2026-01-06T09:00:00.000Z");
+    assert.equal(bucket.total_tokens, 358);
+    assert.equal(bucket.conversation_count, 1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

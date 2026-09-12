@@ -17,6 +17,10 @@
 // `metadata.request_id` with identical metrics and original timestamps, so
 // `request_id` — never `row_id` or `(session_id, request_id)` — is the
 // canonical usage identity across the whole local install.
+//
+// Token components are disjoint: the DB's `metrics.input_tokens` already
+// excludes `cache_read_tokens` and `cache_creation_tokens`, so each reported
+// counter is added once and caches are never subtracted from input.
 
 const DEVIN_TABLE_PROBE_SQL =
   "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('message_nodes','sessions')";
