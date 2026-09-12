@@ -15046,6 +15046,8 @@ async function parsePiLikeIncremental({
   sessionFiles,
   cursors,
   queuePath,
+  projectQueuePath,
+  publicRepoResolver,
   onProgress,
   env,
   defaultModel,
@@ -15055,6 +15057,7 @@ async function parsePiLikeIncremental({
   sourceForProvider,
 } = {}) {
   await ensureDir(path.dirname(queuePath));
+  const projectEnabled = typeof projectQueuePath === "string" && projectQueuePath.length > 0;
   const providerState = cursors[stateKey] && typeof cursors[stateKey] === "object"
     ? cursors[stateKey]
     : {};
@@ -15063,6 +15066,9 @@ async function parsePiLikeIncremental({
     providerState.fileOffsets && typeof providerState.fileOffsets === "object"
       ? { ...providerState.fileOffsets }
       : {};
+
+  const projectSeenIds = new Set(Array.isArray(providerState.projectSeenIds) ? providerState.projectSeenIds : []);
+  const projectFileOffsets = { ...(providerState.projectFileOffsets || {}) };
 
   const files = Array.isArray(sessionFiles)
     ? sessionFiles
@@ -15076,11 +15082,33 @@ async function parsePiLikeIncremental({
       fileOffsets,
       updatedAt: new Date().toISOString(),
     };
-    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
   }
 
   const hourlyState = normalizeHourlyState(cursors?.hourly);
   const touchedBuckets = new Set();
+  const projectState = projectEnabled ? normalizeProjectState(cursors?.projectHourly) : null;
+  const projectTouchedBuckets = projectEnabled ? new Set() : null;
+  const projectMetaCache = projectEnabled ? new Map() : null;
+  const publicRepoCache = projectEnabled ? new Map() : null;
+  // Both queues must publish before cursor progress is acknowledged. Normalized
+  // bucket maps still alias their values, so stage this provider's buckets to
+  // keep a failed project append from mutating the caller's aggregate state.
+  const family = sourceForProvider(null);
+  const ownsSource = (source) => source === family || source.startsWith(`${family}-`);
+  hourlyState.groupQueued = { ...(hourlyState.groupQueued || {}) };
+  for (const [key, bucket] of Object.entries(hourlyState.buckets)) {
+    if (ownsSource(parseBucketKey(key).source || "")) {
+      hourlyState.buckets[key] = { ...bucket, totals: { ...bucket.totals } };
+    }
+  }
+  if (projectState) {
+    for (const [key, bucket] of Object.entries(projectState.buckets)) {
+      if (ownsSource(bucket.source || "")) {
+        projectState.buckets[key] = { ...bucket, totals: { ...bucket.totals } };
+      }
+    }
+  }
   const cb = typeof onProgress === "function" ? onProgress : null;
   let recordsProcessed = 0;
   let eventsAggregated = 0;
@@ -15219,6 +15247,135 @@ async function parsePiLikeIncremental({
     };
   }
 
+  // Project attribution has an independent cursor so upgrading an existing
+  // installation can backfill already-consumed Pi sessions without adding
+  // those messages to the total-usage buckets a second time. Current Pi
+  // session headers persist the real cwd; unlike the encoded session folder,
+  // it is lossless even when path components contain dashes.
+  if (projectEnabled) {
+    for (const filePath of files) {
+      let stat;
+      try { stat = fssync.statSync(filePath); } catch { continue; }
+
+      const prevEntry = projectFileOffsets[filePath] || {};
+      const prevSize = Number(prevEntry.size) || 0;
+      const prevIno = prevEntry.ino;
+      const inodeChanged = typeof prevIno === "number" && prevIno !== stat.ino;
+      const startOffset = stat.size < prevSize || inodeChanged ? 0 : prevSize;
+      if (stat.size <= startOffset) continue;
+
+      const cwd = await resolveOmpFileCwd(filePath);
+      const projectContext = cwd
+        ? await resolveProjectContextForPath({
+            startDir: wsl.mapWslCwdToUnc(cwd, filePath),
+            projectMetaCache,
+            publicRepoCache,
+            publicRepoResolver,
+            projectState,
+          })
+        : null;
+      const projectRef = projectContext?.projectRef || null;
+      const projectKey = projectContext?.projectKey || null;
+
+      let lastCompleteOffset = startOffset;
+      if (projectKey && projectRef) {
+        let stream;
+        try {
+          stream = fssync.createReadStream(filePath, {
+            encoding: "utf8",
+            start: startOffset,
+          });
+        } catch {
+          continue;
+        }
+        let streamedBytes = 0;
+        stream.on("data", (chunk) => {
+          const newlineIndex = chunk.lastIndexOf("\n");
+          if (newlineIndex !== -1) {
+            lastCompleteOffset = startOffset + streamedBytes
+              + Buffer.byteLength(chunk.slice(0, newlineIndex + 1), "utf8");
+          }
+          streamedBytes += Buffer.byteLength(chunk, "utf8");
+        });
+        const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+        for await (const line of rl) {
+          if (!line || !line.trim()) continue;
+          let entry;
+          try { entry = JSON.parse(line); } catch { continue; }
+          const msg = entry?.type === "message" ? entry.message : null;
+          const usage = msg?.role === "assistant" ? msg.usage : null;
+          if (!usage || typeof usage !== "object") continue;
+
+          const entryId = typeof entry.id === "string" && entry.id ? entry.id : null;
+          if (!entryId || projectSeenIds.has(entryId)) continue;
+
+          const input = toNonNegativeInt(usage.input);
+          const output = toNonNegativeInt(usage.output);
+          const cacheRead = toNonNegativeInt(usage.cacheRead);
+          const cacheWrite = toNonNegativeInt(usage.cacheWrite);
+          const reasoningTokens = toNonNegativeInt(usage.reasoningTokens);
+          if (
+            input === 0 &&
+            output === 0 &&
+            cacheRead === 0 &&
+            cacheWrite === 0 &&
+            reasoningTokens === 0
+          ) {
+            projectSeenIds.add(entryId);
+            continue;
+          }
+
+          let tsMs = null;
+          if (Number.isFinite(Number(msg.timestamp)) && Number(msg.timestamp) > 0) {
+            tsMs = Number(msg.timestamp);
+          } else if (typeof entry.timestamp === "string" && entry.timestamp) {
+            const parsed = Date.parse(entry.timestamp);
+            if (Number.isFinite(parsed) && parsed > 0) tsMs = parsed;
+          }
+          const bucketStart = tsMs == null
+            ? null
+            : toUtcHalfHourStart(new Date(tsMs).toISOString());
+          if (!bucketStart) {
+            projectSeenIds.add(entryId);
+            continue;
+          }
+
+          const totalTokens =
+            Number.isFinite(Number(usage.totalTokens)) && Number(usage.totalTokens) > 0
+              ? toNonNegativeInt(usage.totalTokens)
+              : input + output + cacheRead + cacheWrite + reasoningTokens;
+          const delta = {
+            input_tokens: input,
+            cached_input_tokens: cacheRead,
+            cache_creation_input_tokens: cacheWrite,
+            output_tokens: output,
+            reasoning_output_tokens: reasoningTokens,
+            total_tokens: totalTokens,
+            conversation_count: 1,
+          };
+          const projectBucket = getProjectBucket(
+            projectState,
+            projectKey,
+            sourceForProvider(msg.provider),
+            bucketStart,
+            projectRef,
+          );
+          addTotals(projectBucket.totals, delta);
+          projectTouchedBuckets.add(projectBucketKey(projectKey, sourceForProvider(msg.provider), bucketStart));
+          projectSeenIds.add(entryId);
+        }
+      }
+
+      let postStat = stat;
+      try { postStat = fssync.statSync(filePath); } catch {}
+      projectFileOffsets[filePath] = {
+        size: Math.min(lastCompleteOffset, postStat.size),
+        mtimeMs: postStat.mtimeMs,
+        ino: postStat.ino,
+      };
+    }
+  }
+
   const seenArr = Array.from(seenIds);
   const cappedSeen =
     seenArr.length > 10_000 ? seenArr.slice(seenArr.length - 10_000) : seenArr;
@@ -15228,17 +15385,28 @@ async function parsePiLikeIncremental({
     hourlyState,
     touchedBuckets,
   });
+  const projectBucketsQueued = projectEnabled
+    ? await enqueueTouchedProjectBuckets({ projectQueuePath, projectState, projectTouchedBuckets })
+    : 0;
   const updatedAt = new Date().toISOString();
   hourlyState.updatedAt = updatedAt;
   cursors.hourly = hourlyState;
+  if (projectState) {
+    projectState.updatedAt = updatedAt;
+    cursors.projectHourly = projectState;
+  }
   cursors[stateKey] = {
     ...providerState,
     seenIds: cappedSeen,
     fileOffsets,
+    ...(projectEnabled ? {
+      projectSeenIds: Array.from(projectSeenIds).slice(-10_000),
+      projectFileOffsets,
+    } : {}),
     updatedAt,
   };
 
-  return { recordsProcessed, eventsAggregated, bucketsQueued };
+  return { recordsProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }
 
 async function parsePiIncremental(options = {}) {
