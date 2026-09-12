@@ -1596,7 +1596,7 @@ async function cmdSync(argv, context = {}) {
     }
 
     // ── DeepSeek Harness — passive read of ~/.dsh/sessions session logs ──
-    let dshResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    let dshResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, deferredMigrations: 0 };
     if (sourceAllowed("dsh")) {
       await migrateLegacyDeepseekHarnessSource({ cursors, queuePath, queueStatePath });
       const dshSessionFiles = await resolveDshSessionFiles(process.env);
@@ -1615,6 +1615,15 @@ async function cmdSync(argv, context = {}) {
             queuePath,
             onProgress: makeProviderProgress("DeepSeek Harness"),
           });
+          if (dshResult.deferredMigrations > 0) {
+            warnProviderParseFailure(
+              "DeepSeek Harness",
+              new Error(
+                `${dshResult.deferredMigrations} artifact migration(s) deferred; inspect cursors.dsh.deferredMigrations and retry after the replacement is complete`,
+              ),
+              opts,
+            );
+          }
         } catch (err) {
           warnProviderParseFailure("DeepSeek Harness", err, opts);
         }
