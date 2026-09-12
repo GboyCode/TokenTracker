@@ -681,6 +681,9 @@ test("parseDshIncremental keeps legacy migration cursors through a discovery gap
 
     await parseDshIncremental({ sessionFiles: [], cursors, queuePath });
     assert.ok(cursors.dsh.files[logPath], "legacy identity must survive discovery gaps");
+    cursors.dsh.files[logPath].missingSince = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    await parseDshIncremental({ sessionFiles: [], cursors, queuePath });
+    assert.ok(cursors.dsh.files[logPath], "elapsed time cannot make previously counted history safe to replay");
 
     await writeSessionLog(sessionDir, "session.v3.jsonl", [
       headerLine("sess-gap"),

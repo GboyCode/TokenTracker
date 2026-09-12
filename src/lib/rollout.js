@@ -20378,7 +20378,6 @@ async function parseTraeCnApiIncremental({
 // reconciled through per-session contribution ledgers.
 const DSH_SESSION_LOG_MAX_BYTES = 64 * 1024 * 1024;
 const DSH_SESSION_TEXT_MAX_BYTES = 128 * 1024 * 1024;
-const DSH_LEGACY_TOMBSTONE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DSH_SOURCE = "dsh";
 
 // Precedence mirrors the harness's own resolveDshHome: an explicit
@@ -21558,23 +21557,14 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     if (presentFiles.has(filePath) || deferredFilePaths.has(filePath)) continue;
     const state = fileState[filePath];
     const legacySessionId = typeof state?.sessionId === "string" ? state.sessionId : null;
-    // Retain pre-ledger file identity as a bounded migration tombstone. The
-    // old parser had no session ledger, so pruning this state during a short
-    // discovery gap would make a later replacement indistinguishable from a
-    // brand-new session. Current ledgers are retained in sessionState instead;
-    // only legacy states need this compatibility hold. Expire tombstones after
-    // one week so permanently deleted sessions cannot grow cursor state forever.
+    // Retain pre-ledger identity until a replacement is verified. Its counted
+    // usage survives file deletion, so elapsed time cannot authorize replay.
+    // Current ledgers retain the same identity in sessionState instead.
     if (legacySessionId && !storedDshContributions(state) && !sessionState[legacySessionId]) {
-      const missingSince = Number(state?.missingSince);
-      if (
-        !Number.isFinite(missingSince) ||
-        nowMs - missingSince <= DSH_LEGACY_TOMBSTONE_MAX_AGE_MS
-      ) {
-        if (!Number.isFinite(missingSince)) {
-          fileState[filePath] = { ...state, missingSince: nowMs };
-        }
-        continue;
+      if (!Number.isFinite(Number(state?.missingSince))) {
+        fileState[filePath] = { ...state, missingSince: nowMs };
       }
+      continue;
     }
     delete fileState[filePath];
   }
