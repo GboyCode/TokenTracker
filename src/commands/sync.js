@@ -115,6 +115,8 @@ const {
   parseUnslothIncremental,
   resolveAnythingllmDbPath,
   parseAnythingllmIncremental,
+  resolveDevinDbPath,
+  parseDevinIncremental,
   resolveGooseDbPath,
   parseGooseIncremental,
   listDroidSettingsFiles,
@@ -290,6 +292,7 @@ const AUTO_SYNC_SOURCES = new Set([
   "copilot",
   "craft",
   "cursor",
+  "devin",
   "droid",
   "dsh",
   "every-code",
@@ -1678,6 +1681,26 @@ async function cmdSync(argv, context = {}) {
       }
     }
 
+    // ── Devin CLI (Cognition) — SQLite message_nodes chat_message metrics ──
+    let devinResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    if (sourceAllowed("devin")) {
+      const devinDbPath = resolveDevinDbPath(process.env);
+      if (devinDbPath && fssync.existsSync(devinDbPath)) {
+        if (progress?.enabled) progress.start(`Parsing Devin ${renderBar(0)} | buckets 0`);
+        try {
+          devinResult = await parseDevinIncremental({
+            dbPath: devinDbPath,
+            cursors,
+            queuePath,
+            projectQueuePath,
+            onProgress: makeProviderProgress("Devin"),
+          });
+        } catch (err) {
+          warnProviderParseFailure("Devin", err, opts);
+        }
+      }
+    }
+
     // ── Kilo Code VS Code extension (Cline-style ui_messages.json) ──
     const kilocodeTaskFiles = sourceAllowed("kilocode")
       ? mergeBothFileSources({ resolveFiles: resolveKilocodeTaskFiles, env: process.env })
@@ -2932,6 +2955,7 @@ async function cmdSync(argv, context = {}) {
       lmstudioResult.recordsProcessed +
       unslothResult.recordsProcessed +
       anythingllmResult.recordsProcessed +
+      devinResult.recordsProcessed +
       kiloResult.recordsProcessed +
       mimoResult.recordsProcessed +
       zcodeResult.recordsProcessed +
@@ -2970,6 +2994,7 @@ async function cmdSync(argv, context = {}) {
       lmstudioResult.bucketsQueued +
       unslothResult.bucketsQueued +
       anythingllmResult.bucketsQueued +
+      devinResult.bucketsQueued +
       kiloResult.bucketsQueued +
       mimoResult.bucketsQueued +
       zcodeResult.bucketsQueued +

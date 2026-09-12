@@ -403,6 +403,69 @@ describe("UsageOverview", () => {
     expect(screen.getByText(copy("usage.overview.week_cross_month_hint"))).toBeTruthy();
   });
 
+  it("renders Devin with its icon and shows the unpriced-models notice in provider and All views", async () => {
+    const user = userEvent.setup();
+    const fleetData = [
+      {
+        source: "devin",
+        label: "DEVIN",
+        totalPercent: "70.00",
+        usage: 72_958,
+        usd: 0,
+        models: [
+          { id: "swe-2-high", name: "swe-2-high", share: 80, usage: 58_366, cost: null },
+          { id: "compactor", name: "compactor", share: 20, usage: 14_592, cost: null },
+        ],
+      },
+      {
+        source: "codex",
+        label: "CODEX",
+        totalPercent: "30.00",
+        usage: 30_000,
+        usd: 0.1,
+        models: [{ id: "gpt-5.6", name: "gpt-5.6", share: 100, usage: 30_000, cost: 0.1 }],
+      },
+    ];
+    const { container } = render(
+      <UsageOverview
+        period="month"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="102,958"
+        fleetData={fleetData}
+        from="2026-07-01"
+        to="2026-07-31"
+      />,
+    );
+
+    expect(screen.getByText("DEVIN")).toBeTruthy();
+    const icon = container.querySelector('img[src="/brand-logos/devin.svg"]');
+    expect(icon).toBeTruthy();
+    expect(icon).toHaveClass("dark:invert");
+    // Collapsed view: no notice yet.
+    expect(screen.queryByText(copy("usage.overview.devin_notice_body"))).toBeNull();
+
+    // Provider drill-down shows the notice.
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /DEVIN:/i }));
+    });
+    expect(screen.getByText(copy("usage.overview.devin_notice_body"))).toBeTruthy();
+    expect(screen.getByText("swe-2-high")).toBeTruthy();
+    expect(screen.getByText("compactor")).toBeTruthy();
+
+    // Codex view does not show Devin's notice.
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /CODEX:/i }));
+    });
+    expect(screen.queryByText(copy("usage.overview.devin_notice_body"))).toBeNull();
+
+    // The combined All view still warns because Devin contributes to it.
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /All tools:/i }));
+    });
+    expect(screen.getByText(copy("usage.overview.devin_notice_body"))).toBeTruthy();
+  });
+
   it("omits the cross-month hint when the selected week stays inside one month", () => {
     render(
       <UsageOverview

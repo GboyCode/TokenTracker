@@ -72,6 +72,7 @@ const {
   resolveLmstudioLogFiles,
   resolveUnslothDbPath,
   resolveAnythingllmDbPath,
+  resolveDevinDbPath,
   resolveReasonixHome,
   resolveTraeStoragePath,
 } = require("../lib/rollout");
@@ -147,6 +148,7 @@ const SUPPORTED_PROVIDERS = [
   "TRAE Work CN",
   "LM Studio",
   "Unsloth Studio",
+  "Devin CLI",
 ];
 
 async function cmdInit(argv) {
@@ -908,6 +910,18 @@ async function applyIntegrationSetup({
     if (anythingllmDbPath && fssync.existsSync(anythingllmDbPath)) {
       summary.push({
         label: "AnythingLLM Desktop",
+        status: "detected",
+        detail: "Passive reader (no hook needed)",
+      });
+    }
+  }
+
+  // Devin CLI (Cognition): passive SQLite reader — no hook installation needed.
+  {
+    const devinDbPath = resolveDevinDbPath(process.env);
+    if (devinDbPath && fssync.existsSync(devinDbPath)) {
+      summary.push({
+        label: "Devin CLI",
         status: "detected",
         detail: "Passive reader (no hook needed)",
       });

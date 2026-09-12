@@ -8,6 +8,8 @@
   "usage.overview.cache_hit_rate_label": "キャッシュヒット率",
   "usage.overview.cache_hit_rate_detail": "{{reused}} 再利用 / {{input}} 入力",
   "usage.overview.antigravity_notice_body": "Antigravity のローカルログには実際の使用量フィールドがないため、ここの数値は文字数（約 4 文字／トークン）から推定したもので、Gemini の prompt cache 割引も差し引かれていません。上限の推定値として扱い、請求書との照合には使わないでください。",
+  "usage.overview.devin_notice_title": "料金は未算出です",
+  "usage.overview.devin_notice_body": "Devin は実際のローカルトークン数を報告しますが、このビルドには swe-2、swe-2-high、compactor の料金データがないため、これらの使用量はドル換算の推定から除外されます。$0 と表示されても無料とは限りません。",
   "stats.period.today": "今日",
   "stats.period.week": "今週",
   "stats.period.month": "今月",
