@@ -2,13 +2,13 @@ import XCTest
 
 /// Exercises the production publication seam — `UsageLimitsPublicationAuthority`
 /// plus `displayRecord`/`applyingDevinSelection`, the same functions
-/// `DashboardViewModel.refreshUsageLimits` calls — across the completion
-/// orderings that broke review: a late response issued under a superseded
-/// Devin selection must never publish, cache or reschedule.
+/// `DashboardViewModel.refreshUsageLimits` calls — across completion orderings:
+/// a late response issued under a superseded Devin selection must never
+/// publish, cache or reschedule.
 final class UsageLimitsPublicationTests: XCTestCase {
 
-    /// Pi's reproduction: a refresh issued while Devin was off must not
-    /// overwrite the newer enabled publication when it lands late.
+    /// A refresh issued while Devin was off must not overwrite the newer
+    /// enabled publication when it lands late.
     func testLateOffResponseCannotOverwriteNewerOnPublication() throws {
         var authority = UsageLimitsPublicationAuthority()
         var published: UsageLimitsResponse? = nil
