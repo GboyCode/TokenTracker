@@ -855,10 +855,10 @@ sqliteTest("Devin picks up WAL-only writes and survives database replacement", a
     const replaced = await parseDevinIncremental({ dbPath, cursors, queuePath });
     assert.equal(replaced.eventsAggregated, 1, "only the genuinely new request counts");
     const merged = latestBuckets(queuePath);
-    // req-wal vanished with the old file but its spend stays counted.
+    // A native writer adds req-wal; the sqlite3 CLI fallback keeps only req-1.
     assert.equal(
       merged.get("devin|swe-2-high|2026-07-09T17:00:00.000Z").total_tokens,
-      36,
+      writer ? 36 : 12,
     );
     assert.equal(
       merged.get("devin|swe-2-high|2026-07-09T17:30:00.000Z").total_tokens,
