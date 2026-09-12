@@ -1098,6 +1098,24 @@ sqliteTest("Devin queue write failure leaves published state untouched so a retr
         createdAt: 1783600200,
       });
 
+      // An unrelated provider's published bucket must stay a shared
+      // read-only reference — the parser stages only devin-owned state.
+      const foreignBucket = {
+        totals: {
+          input_tokens: 7,
+          cached_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          output_tokens: 3,
+          reasoning_output_tokens: 0,
+          total_tokens: 10,
+          billable_total_tokens: 10,
+          total_cost_usd: 0,
+          conversation_count: 1,
+        },
+        queuedKey: "foreign-key",
+      };
+      cursors.hourly.buckets["codex|gpt-5|2026-07-09T18:00:00.000Z"] = foreignBucket;
+
       const failedFile = target === "aggregate" ? queuePath : projectQueuePath;
       fsp.appendFile = async function (file, ...args) {
         if (file === failedFile) {
@@ -1116,10 +1134,15 @@ sqliteTest("Devin queue write failure leaves published state untouched so a retr
         ["request-1"],
         `${target}: request-2 must not be staged into the published ledger`,
       );
-      const devinBucket = Object.values(cursors.hourly.buckets).find(
-        (bucket) => bucket?.totals && bucket.totals.total_tokens > 0,
-      );
+      const devinBucket = cursors.hourly.buckets["devin|swe-2-high|2026-07-09T18:00:00.000Z"];
       assert.equal(devinBucket.totals.total_tokens, 55, `${target}: published bucket unpolluted`);
+      assert.equal(
+        cursors.hourly.buckets["codex|gpt-5|2026-07-09T18:00:00.000Z"],
+        foreignBucket,
+        `${target}: foreign provider bucket untouched by reference`,
+      );
+      assert.equal(foreignBucket.totals.total_tokens, 10);
+      assert.equal(foreignBucket.queuedKey, "foreign-key");
 
       // Cursor JSON round-trip, then the retry must re-derive the same
       // contribution and let latest-wins rows settle both queues at 65.

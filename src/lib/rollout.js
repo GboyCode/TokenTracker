@@ -12978,6 +12978,29 @@ function devinStringMap(value) {
   return dict;
 }
 
+// Stage only the bucket objects this parser can mutate. The shared
+// normalizers copy the bucket maps but alias each bucket/totals object, and
+// the enqueue helpers stamp queuedKey before appendFile runs — so a failed
+// append used to leave the caller's published state polluted. Only
+// devin-owned entries get private copies; every other provider's buckets
+// stay shared read-only references.
+function stageDevinBuckets(buckets, isDevinBucket) {
+  const staged = {};
+  for (const [key, bucket] of Object.entries(buckets || {})) {
+    staged[key] =
+      bucket && typeof bucket === "object" && isDevinBucket(key, bucket)
+        ? {
+            ...bucket,
+            totals:
+              bucket.totals && typeof bucket.totals === "object"
+                ? { ...bucket.totals }
+                : bucket.totals,
+          }
+        : bucket;
+  }
+  return staged;
+}
+
 async function readDevinUsageRows(dbPath, sqliteOptions = {}) {
   if (!dbPath || !fssync.existsSync(dbPath)) return [];
   const options = {
@@ -13045,20 +13068,43 @@ async function parseDevinIncremental({
   const rows = await readDevinUsageRows(resolvedDb, sqliteOptions);
   const { events } = buildDevinUsageEvents(rows);
 
-  // Deep-clone the normalized working states so reconciliation and enqueue
-  // mutations (bucket totals, queuedKey, groupQueued) never touch `cursors`
-  // before both queue appends below succeed — a failed append must leave the
-  // caller's published state untouched so a retry re-derives the same
-  // contribution and latest-wins rows recover either queue (same convention
-  // as parseTraeCnIncremental). The request/conversation dicts above are
-  // already detached copies whose entries are only ever replaced wholesale.
-  const hourlyState = structuredClone(normalizeHourlyState(cursors?.hourly));
+  // Stage the normalized working states: bucket-map copies alias the
+  // caller's published bucket objects, so give only the devin-owned entries
+  // (plus the flat groupQueued map) private copies. Reconciliation and
+  // enqueue mutations then land on staged state and are published only after
+  // both queue appends below succeed — a failed append leaves `cursors`
+  // untouched so a retry re-derives the same contribution and latest-wins
+  // rows recover either queue. Unrelated providers' buckets stay shared
+  // read-only references (this parser never writes their keys).
+  const hourlyState = normalizeHourlyState(cursors?.hourly);
+  hourlyState.buckets = stageDevinBuckets(
+    hourlyState.buckets,
+    (key) =>
+      (normalizeSourceInput(parseBucketKey(key).source) || DEFAULT_SOURCE) ===
+      DEVIN_SOURCE,
+  );
+  hourlyState.groupQueued =
+    hourlyState.groupQueued && typeof hourlyState.groupQueued === "object"
+      ? { ...hourlyState.groupQueued }
+      : {};
   const touchedBuckets = new Set();
   const projectEnabled =
     typeof projectQueuePath === "string" && projectQueuePath.length > 0;
   const projectState = projectEnabled
-    ? structuredClone(normalizeProjectState(cursors?.projectHourly))
+    ? normalizeProjectState(cursors?.projectHourly)
     : null;
+  if (projectState) {
+    // Project bucket keys are `projectKey|source|hourStart`; this parser only
+    // ever looks up keys whose middle segment is the devin source.
+    projectState.buckets = stageDevinBuckets(projectState.buckets, (key) => {
+      const last = key.lastIndexOf(BUCKET_SEPARATOR);
+      const prev = last > 0 ? key.lastIndexOf(BUCKET_SEPARATOR, last - 1) : -1;
+      const source = prev >= 0 ? key.slice(prev + 1, last) : "";
+      return (
+        (normalizeSourceInput(source) || DEFAULT_SOURCE) === DEVIN_SOURCE
+      );
+    });
+  }
   const projectTouchedBuckets = projectEnabled ? new Set() : null;
   const projectMetaCache = projectEnabled ? new Map() : null;
   const publicRepoCache = projectEnabled ? new Map() : null;
