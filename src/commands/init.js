@@ -148,6 +148,7 @@ const SUPPORTED_PROVIDERS = [
   "TRAE Work CN",
   "LM Studio",
   "Unsloth Studio",
+  "Devin CLI",
 ];
 
 async function cmdInit(argv) {

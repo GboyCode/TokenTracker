@@ -47,4 +47,5 @@ export const AGENT_LOGOS = [
   { id: 35, name: "AStudio", provider: "acode" },
   { id: 36, name: "LM Studio", provider: "lmstudio" },
   { id: 37, name: "Unsloth Studio", provider: "unsloth" },
+  { id: 38, name: "Devin CLI", provider: "devin" },
 ];

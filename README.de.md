@@ -6,7 +6,7 @@
 
 ### Sieh genau, was du für KI ausgibst – über jedes CLI hinweg
 
-Sammle automatisch Token-Zahlen von **37 KI-Coding-Tools**, aggregiere sie lokal und sieh echte Kostentrends in einem schönen Dashboard. Kein Cloud-Konto, keine API-Keys, kein Setup – nur ein Befehl.
+Sammle automatisch Token-Zahlen von **38 KI-Coding-Tools**, aggregiere sie lokal und sieh echte Kostentrends in einem schönen Dashboard. Kein Cloud-Konto, keine API-Keys, kein Setup – nur ein Befehl.
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -88,7 +88,7 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 
 ## ✨ Features
 
-- 🔌 **37 KI-Tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio
+- 🔌 **38 KI-Tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio, Devin CLI
 - 🏠 **Local-First** — Läuft auf deinem Rechner. Parst Logs lokal, ohne Konto oder API-Keys.
 - 🚀 **Zero Config** — Hooks installieren sich beim ersten Start automatisch. Von null zum Dashboard in 30 Sekunden.
 - 📊 **Schönes Dashboard** — Nutzungstrends, Kostenaufschlüsselung nach Modell, GitHub-ähnliche Aktivitäts-Heatmap, Projektzuordnung
@@ -221,7 +221,7 @@ Fehlt dein Tool? [Erstelle ein Issue](https://github.com/xiufengsun/TokenTracker
 
 | Funktion | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
 |---|:---:|:---:|:---:|
-| **Unterstützte KI-Tools** | **37** | Multi-Agent | Multi-Agent |
+| **Unterstützte KI-Tools** | **38** | Multi-Agent | Multi-Agent |
 | **Primäre Benutzeroberfläche** | Native Desktop-Apps & Web-Dashboard | Terminal-CLI | Terminal-TUI & CLI |
 | **Local-First-Analyse** | ✅ | ✅ | ✅ |
 | **Native Desktop-Apps** | ✅ macOS, Windows, Linux | ❌ | ❌ |

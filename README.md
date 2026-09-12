@@ -6,7 +6,7 @@
 
 ### Track every AI token — then bring your usage to life
 
-An accurate, local-first token usage and cost dashboard for **37 AI coding tools** — plus a desktop pet, **4 native widgets**, and **15 achievement tracks**. No cloud account, no API keys, no setup.
+An accurate, local-first token usage and cost dashboard for **38 AI coding tools** — plus a desktop pet, **4 native widgets**, and **15 achievement tracks**. No cloud account, no API keys, no setup.
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -147,7 +147,7 @@ An Arch `PKGBUILD` for a local pacman install lives in `TokenTrackerLinux/packag
 
 ## ✨ Features
 
-- 🔌 **37 AI tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio
+- 🔌 **38 AI tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio, Devin CLI
 - 🏠 **Local-first** — Runs on your machine. Parses logs locally with no account or API keys needed.
 - 🚀 **Zero config** — Hooks auto-install on first run. From zero to dashboard in 30 seconds.
 - 📊 **Beautiful dashboard** — Usage trends, cost breakdowns by model, GitHub-style activity heatmap, project attribution
@@ -296,7 +296,7 @@ Missing your tool? [Open an issue](https://github.com/xiufengsun/TokenTracker/is
 
 | Capability | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
 |---|:---:|:---:|:---:|
-| **AI tools supported** | **37** | Multi-agent | Multi-agent |
+| **AI tools supported** | **38** | Multi-agent | Multi-agent |
 | **Primary interface** | Desktop apps & web dashboard | Terminal CLI | Terminal TUI & CLI |
 | **Local analysis** | ✅ | ✅ | ✅ |
 | **Native desktop apps** | ✅ macOS, Windows, Linux | ❌ | ❌ |
