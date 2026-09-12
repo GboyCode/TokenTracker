@@ -433,6 +433,8 @@ const PROVIDER_LOGO_MAP = {
   DOTS: "/brand-logos/dots.png",
   "PI-DOTS": "/brand-logos/dots.png",
   QODER: "/brand-logos/qoder.svg",
+  // Devin (devin.ai) — the three-hexagon "nodes" mark, mono like Qoder.
+  DEVIN: "/brand-logos/devin.svg",
   REASONIX: "/brand-logos/reasonix.png",
   UNSLOTH: "/brand-logos/unsloth.svg",
   // Qoder CN ships its own brand mark — the domestic edition's icon (a green
@@ -452,6 +454,7 @@ const PROVIDER_LOGO_CLASS_MAP = {
   // as AnythingLLM: black on light backgrounds, native white on dark.
   PI: "brightness-0 dark:brightness-100",
   QODER: "dark:invert",
+  DEVIN: "dark:invert",
   // The sail PNG is solid black on transparent — invert to white in dark
   // mode so it doesn't disappear against the dark dashboard background.
   DOTS: "dark:invert",

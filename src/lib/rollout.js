@@ -21,6 +21,11 @@ const {
   currentCodexModel,
   snapshotCodexModelAttributionState,
 } = require("./codex-model-attribution");
+const {
+  DEVIN_TABLE_PROBE_SQL,
+  devinUsageSql,
+  buildDevinUsageEvents,
+} = require("./devin-usage");
 const { USD_TICKS_PER_USD, normalizeGrokUsage } = require("./grok-usage");
 
 const DEFAULT_SOURCE = "codex";
@@ -12900,6 +12905,294 @@ async function parseAnythingllmIncremental({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Devin (Cognition — devin.ai CLI)
+//
+// Data: SQLite at
+//   macOS/Linux: $XDG_DATA_HOME/devin/cli/sessions.db (~/.local/share)
+//   Windows:     no evidenced native location; the CLI's XDG data dir inside a
+//                WSL distro is probed via the \\wsl$ UNC bridge
+//   Override:    $TOKENTRACKER_DEVIN_DB
+//
+// Devin rewrites history aggressively: replay, compaction and forks copy
+// message_nodes rows, so several nodes share one chat_message
+// `.metadata.request_id` (verified on CLI 3000.10.21: ~2 duplicated nodes per
+// request). request_id is the billing identity — copies must not add usage.
+// Aggregation is a full projection + per-request reconcile keyed by
+// request_id: every fingerprint change re-reads the usage-only rows, the
+// ledger in cursors.devin.requests subtracts a request's prior contribution
+// before adding its current one, and deleted/compacted history keeps its
+// (non-refunded) ledger entry. There is no row_id high-water mark because
+// in-place metric corrections cannot be detected by one.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEVIN_SOURCE = "devin";
+
+function resolveDevinDbPath(env = process.env, deps = {}) {
+  const override =
+    typeof env.TOKENTRACKER_DEVIN_DB === "string" && env.TOKENTRACKER_DEVIN_DB.trim();
+  if (override) return path.resolve(env.TOKENTRACKER_DEVIN_DB.trim());
+  const home = env.HOME || env.USERPROFILE || os.homedir();
+  const xdgDataHome =
+    typeof env.XDG_DATA_HOME === "string" && env.XDG_DATA_HOME.trim()
+      ? path.resolve(env.XDG_DATA_HOME.trim())
+      : path.join(home, ".local", "share");
+  if (process.platform !== "win32") {
+    return path.join(xdgDataHome, "devin", "cli", "sessions.db");
+  }
+  // Devin CLI is not known to write a native-Windows data dir; on Windows its
+  // sessions.db lives under the distro's XDG home, reachable over \\wsl$.
+  const wslDir = wsl.shouldProbeWsl(env)
+    ? wsl.discoverWslHome(".local/share/devin/cli", { ...deps, env })
+    : null;
+  const wslValue = wslDir ? path.join(wslDir, "sessions.db") : null;
+  const paths = resolveInstallPaths({ nativeValue: null, wslValue }, env, deps);
+  return paths.native || paths.wsl;
+}
+
+function devinSqliteFingerprint(dbPath) {
+  const fingerprint = sqliteSidecarFingerprint(dbPath);
+  // -shm is reader bookkeeping: opening a WAL database can bump it without any
+  // content change, so it must not force a rescan (same convention as Unsloth).
+  delete fingerprint["-shm"];
+  return fingerprint;
+}
+
+async function readDevinUsageRows(dbPath, sqliteOptions = {}) {
+  if (!dbPath || !fssync.existsSync(dbPath)) return [];
+  const options = {
+    label: "Devin",
+    maxBuffer: 32 * 1024 * 1024,
+    timeout: 30_000,
+    readOnly: true,
+    throwOnReadFailure: true,
+    ...sqliteOptions,
+  };
+  let snapshot = null;
+  let effectiveDbPath = dbPath;
+  if (isUncPath(dbPath)) {
+    try {
+      snapshot = snapshotSqliteDb(dbPath);
+      effectiveDbPath = snapshot.path;
+    } catch (_e) { }
+  }
+  try {
+    const tables = new Set(
+      (await readSqliteJsonRowsAsync(effectiveDbPath, DEVIN_TABLE_PROBE_SQL, options))
+        .map((row) => row?.name)
+        .filter(Boolean),
+    );
+    if (!tables.has("message_nodes")) return [];
+    return await readSqliteJsonRowsAsync(
+      effectiveDbPath,
+      devinUsageSql({ hasSessionsTable: tables.has("sessions") }),
+      options,
+    );
+  } finally {
+    if (snapshot) snapshot.cleanup();
+  }
+}
+
+async function parseDevinIncremental({
+  dbPath,
+  cursors,
+  queuePath,
+  projectQueuePath,
+  onProgress,
+  env,
+  sqliteOptions,
+  publicRepoResolver,
+} = {}) {
+  await ensureDir(path.dirname(queuePath));
+  const resolvedDb = dbPath || resolveDevinDbPath(env || process.env);
+  const priorState =
+    cursors.devin && typeof cursors.devin === "object" ? cursors.devin : {};
+  const requests =
+    priorState.requests && typeof priorState.requests === "object"
+      ? priorState.requests
+      : {};
+  const conversations =
+    priorState.conversations && typeof priorState.conversations === "object"
+      ? priorState.conversations
+      : {};
+  if (!resolvedDb || !fssync.existsSync(resolvedDb)) {
+    cursors.devin = {
+      ...priorState,
+      requests,
+      conversations,
+      updatedAt: new Date().toISOString(),
+    };
+    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
+  }
+
+  // Cheap unchanged check: skip all SQL work when neither the DB nor its WAL
+  // moved since the last published state.
+  const initialFingerprint = devinSqliteFingerprint(resolvedDb);
+  if (sameSqliteFingerprint(initialFingerprint, priorState.fingerprint)) {
+    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
+  }
+
+  const rows = await readDevinUsageRows(resolvedDb, sqliteOptions);
+  const { events, conversations: nextConversations } = buildDevinUsageEvents(
+    rows,
+    conversations,
+  );
+
+  const hourlyState = normalizeHourlyState(cursors?.hourly);
+  const touchedBuckets = new Set();
+  const projectEnabled =
+    typeof projectQueuePath === "string" && projectQueuePath.length > 0;
+  const projectState = projectEnabled ? normalizeProjectState(cursors?.projectHourly) : null;
+  const projectTouchedBuckets = projectEnabled ? new Set() : null;
+  const projectMetaCache = projectEnabled ? new Map() : null;
+  const publicRepoCache = projectEnabled ? new Map() : null;
+  const projectContextBySession = projectEnabled ? new Map() : null;
+  const cb = typeof onProgress === "function" ? onProgress : null;
+  let eventsAggregated = 0;
+
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
+    const bucketStart = toUtcHalfHourStart(new Date(event.tsMs).toISOString());
+    if (!bucketStart) continue;
+
+    let projectKey = null;
+    let projectRef = null;
+    if (projectEnabled && event.sessionId) {
+      let context = projectContextBySession.get(event.sessionId);
+      if (context === undefined) {
+        const startDir = event.workingDirectory
+          ? wsl.mapWslCwdToUnc(event.workingDirectory, resolvedDb)
+          : null;
+        context = startDir
+          ? await resolveProjectContextForPath({
+              startDir,
+              projectMetaCache,
+              publicRepoCache,
+              publicRepoResolver,
+              projectState,
+            })
+          : null;
+        projectContextBySession.set(event.sessionId, context || null);
+      }
+      projectKey = context?.projectKey || null;
+      projectRef = context?.projectRef || null;
+    }
+
+    const previous = requests[event.requestId];
+    const previousTotals =
+      previous?.totals && typeof previous.totals === "object" ? previous.totals : null;
+    const unchanged =
+      previousTotals &&
+      totalsKey(previousTotals) === totalsKey(event.totals) &&
+      previous.bucketStart === bucketStart &&
+      previous.model === event.model &&
+      (previous.projectKey || null) === projectKey;
+    if (!unchanged) {
+      if (previousTotals && previous.bucketStart && previous.model) {
+        const oldBucket = getHourlyBucket(
+          hourlyState,
+          DEVIN_SOURCE,
+          previous.model,
+          previous.bucketStart,
+        );
+        subtractTotals(oldBucket.totals, previousTotals);
+        touchedBuckets.add(
+          bucketKey(DEVIN_SOURCE, previous.model, previous.bucketStart),
+        );
+        if (projectEnabled && previous.projectKey) {
+          const oldProjectBucket = getProjectBucket(
+            projectState,
+            previous.projectKey,
+            DEVIN_SOURCE,
+            previous.bucketStart,
+            previous.projectRef || null,
+          );
+          subtractTotals(oldProjectBucket.totals, previousTotals);
+          projectTouchedBuckets.add(
+            projectBucketKey(previous.projectKey, DEVIN_SOURCE, previous.bucketStart),
+          );
+        }
+      }
+
+      const bucket = getHourlyBucket(hourlyState, DEVIN_SOURCE, event.model, bucketStart);
+      addTotals(bucket.totals, event.totals);
+      touchedBuckets.add(bucketKey(DEVIN_SOURCE, event.model, bucketStart));
+      if (projectEnabled && projectKey) {
+        const projectBucket = getProjectBucket(
+          projectState,
+          projectKey,
+          DEVIN_SOURCE,
+          bucketStart,
+          projectRef,
+        );
+        addTotals(projectBucket.totals, event.totals);
+        projectTouchedBuckets.add(
+          projectBucketKey(projectKey, DEVIN_SOURCE, bucketStart),
+        );
+      }
+      // The ledger records only what was added: model, bucket, totals and the
+      // resolved project identity — never request text or raw working paths.
+      requests[event.requestId] = {
+        model: event.model,
+        bucketStart,
+        totals: event.totals,
+        projectKey,
+        projectRef,
+        updatedAt: new Date().toISOString(),
+      };
+      eventsAggregated += 1;
+    }
+    if (cb) {
+      cb({
+        index: index + 1,
+        total: events.length,
+        recordsProcessed: index + 1,
+        eventsAggregated,
+        bucketsQueued: touchedBuckets.size,
+      });
+    }
+  }
+
+  const bucketsQueued = await enqueueTouchedBuckets({
+    queuePath,
+    hourlyState,
+    touchedBuckets,
+  });
+  const projectBucketsQueued = projectEnabled
+    ? await enqueueTouchedProjectBuckets({
+        projectQueuePath,
+        projectState,
+        projectTouchedBuckets,
+      })
+      : 0;
+  // If Devin wrote to the DB/WAL while we read, publish the pre-read
+  // fingerprint so the next sync re-reads instead of acknowledging a snapshot
+  // it never saw (same convention as parseUnslothIncremental).
+  const finalFingerprint = devinSqliteFingerprint(resolvedDb);
+  const updatedAt = new Date().toISOString();
+  hourlyState.updatedAt = updatedAt;
+  cursors.hourly = hourlyState;
+  cursors.devin = {
+    version: 1,
+    requests,
+    conversations: nextConversations,
+    fingerprint: sameSqliteFingerprint(initialFingerprint, finalFingerprint)
+      ? finalFingerprint
+      : initialFingerprint,
+    updatedAt,
+  };
+  if (projectState) {
+    projectState.updatedAt = updatedAt;
+    cursors.projectHourly = projectState;
+  }
+  return {
+    recordsProcessed: rows.length,
+    eventsAggregated,
+    bucketsQueued,
+    projectBucketsQueued,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Goose (Block AI agent — github.com/block/goose)
 //
 // Data: SQLite at
@@ -20586,6 +20879,9 @@ module.exports = {
   parseAnythingllmTimestamp,
   readAnythingllmUsageRows,
   parseAnythingllmIncremental,
+  resolveDevinDbPath,
+  readDevinUsageRows,
+  parseDevinIncremental,
   resolveGooseDbPath,
   parseGooseModelName,
   parseGooseCreatedAt,
