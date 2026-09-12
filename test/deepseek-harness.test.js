@@ -465,6 +465,51 @@ test("parseDshIncremental does not acknowledge an incomplete trailing event", as
   }
 });
 
+for (const compressed of [false, true]) {
+  for (const prefixCount of [0, 1]) {
+    test(`parseDshIncremental retries a repaired interior v3 record (compressed=${compressed}, prefix=${prefixCount})`, async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-interior-repair-"));
+      const queuePath = path.join(dir, "queue.jsonl");
+      const logPath = path.join(dir, compressed ? "session.v3.jsonl.zstd" : "session.v3.jsonl");
+      const header = JSON.stringify({ type: "session/start", id: "interior-repair" });
+      const event = (seq) => JSON.stringify({
+        type: "message/assistant", seq, time: T0,
+        data: { model: "deepseek-v4-pro", usage: { inputTokens: 100, outputTokens: 20 } },
+      });
+      const write = async (lines) => {
+        const bytes = Buffer.from([...lines, ""].join("\n"));
+        fs.writeFileSync(logPath, compressed ? await zstdCompress(bytes) : bytes);
+      };
+      let cursors = {};
+      const sync = async () => {
+        cursors = JSON.parse(JSON.stringify(cursors));
+        return parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+      };
+      const total = () => Object.values(cursors.hourly.buckets)
+        .reduce((sum, bucket) => sum + bucket.totals.total_tokens, 0);
+      const prefix = prefixCount ? [event(0)] : [];
+      try {
+        await write([header, ...prefix, event(1).slice(0, -1), event(2)]);
+        await sync();
+        assert.equal(total(), prefixCount * 120);
+        assert.equal(cursors.dsh.files[logPath].lastSeq, prefixCount ? 0 : -1);
+        await sync();
+        assert.equal(total(), prefixCount * 120, "unchanged damaged log must not recount the prefix");
+        await write([header, ...prefix, event(1), event(2), event(3)]);
+        await sync();
+        assert.equal(total(), (prefixCount + 3) * 120, "repair plus append must recover every event exactly once");
+        const queue = fs.readFileSync(queuePath, "utf8");
+        await sync();
+        await sync();
+        assert.equal(total(), (prefixCount + 3) * 120);
+        assert.equal(fs.readFileSync(queuePath, "utf8"), queue, "serialized retries must not append duplicate buckets");
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
 test("parseDshIncremental does not commit cursor state when queue append fails", async () => {
   const { dir, logPath } = await makeTree({
     compression: "none",

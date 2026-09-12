@@ -20609,7 +20609,9 @@ function extractDshSessionUsage(text, lastSeq = -1) {
     if (!line || !line.trim()) continue;
     if (!isCompleteDshJsonLine(line)) {
       complete = false;
-      continue;
+      // A later event cannot make this gap safe to acknowledge. Stop at the
+      // complete prefix so a repaired record is retried before seq advances.
+      break;
     }
     const eventType = parseDshJsonString(findDshJsonProperty(line, "type"));
     if (!eventType) continue;
