@@ -152,6 +152,7 @@ const SUPPORTED_PROVIDERS = [
   "LM Studio",
   "Unsloth Studio",
   "Devin CLI",
+  "Cline",
   "MiniMax Code",
 ];
 
@@ -950,6 +951,30 @@ async function applyIntegrationSetup({
         label: "Kilo Code (VS Code extension)",
         status: "detected",
         detail: `Passive reader · ${taskFiles.length} task${taskFiles.length !== 1 ? "s" : ""} in ${ides}`,
+      });
+    }
+  }
+
+  // Cline CLI v3 / desktop app: passive reader — no hook installation needed.
+  // Cline keeps its own data dir (~/.cline/data/sessions, overridable through
+  // CLINE_DIR/CLINE_DATA_DIR/CLINE_SESSION_DATA_DIR); the VS Code extension's
+  // globalStorage layout is a separate, older install we do not read.
+  {
+    const { resolveClineSessionFilesWithStatus } = require("../lib/rollout");
+    const clineScan = resolveClineSessionFilesWithStatus(process.env);
+    const sessionFiles = clineScan.files;
+    if (sessionFiles.length > 0) {
+      summary.push({
+        label: "Cline",
+        status: "detected",
+        detail: `Passive reader · ${sessionFiles.length} transcript${sessionFiles.length !== 1 ? "s" : ""}`,
+      });
+    }
+    for (const failure of clineScan.errors) {
+      summary.push({
+        label: "Cline",
+        status: "error",
+        detail: `Passive reader discovery failed · ${failure.root}: ${failure.error.code ? `${failure.error.code}: ` : ""}${failure.error.message}`,
       });
     }
   }

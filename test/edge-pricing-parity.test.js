@@ -274,7 +274,7 @@ test("all cloud cost paths only prefer provider-reported costs for authoritative
     assert.ok(source.includes("reportedCost"), `${name}: reported cost branch missing`);
     assert.match(
       source,
-      /const SOURCES_WITH_AUTHORITATIVE_COST = new Set\(\["grok"\]\);/,
+      /const SOURCES_WITH_AUTHORITATIVE_COST = new Set\(\["grok", "cline"\]\);/,
       `${name}: authoritative cost sources must be explicitly allowlisted`,
     );
     assert.match(
@@ -282,6 +282,20 @@ test("all cloud cost paths only prefer provider-reported costs for authoritative
       /SOURCES_WITH_AUTHORITATIVE_COST\.has\((?:row\.source|src)\)[\s\S]*?Number\.isFinite\(reportedCost\)[\s\S]*?reportedCost > 0/,
       `${name}: positive reported cost must be gated by source`,
     );
+  }
+});
+
+test("all cloud cost paths keep Cline :free models at zero", () => {
+  for (const name of [CANONICAL, ...MIRRORS]) {
+    const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
+    const getModelPricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
+    for (const model of ["deepseek/deepseek-r1:free", "cline-free/deepseek-v4.1-flash", "cline-pass/glm-5.3"]) {
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(getModelPricing(model, "cline"))),
+        { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+        `${name}: ${model}`,
+      );
+    }
   }
 });
 

@@ -115,6 +115,8 @@ const {
   parseKilocodeIncremental,
   resolveRoocodeTaskFiles,
   parseRoocodeIncremental,
+  resolveClineSessionFilesWithStatus,
+  parseClineIncremental,
   resolveZedDbPath,
   parseZedIncremental,
   resolveLmstudioLogFiles,
@@ -295,6 +297,7 @@ const AUTO_SYNC_SOURCES = new Set([
   "anythingllm",
   "claude",
   "claude-science",
+  "cline",
   "codebuddy",
   "codex",
   "copilot",
@@ -1889,6 +1892,40 @@ async function cmdSync(argv, context = {}) {
       }
     }
 
+    // ── Cline (CLI v3 / desktop app — ~/.cline/data/sessions) ──
+    let clineResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    if (sourceAllowed("cline")) {
+      try {
+        const clineScan = resolveClineSessionFilesWithStatus(process.env);
+        const clineSessionFiles = clineScan.files;
+        for (const failure of clineScan.errors) {
+          warnProviderParseFailure("Cline", failure.error, opts);
+        }
+        if (progress?.enabled && clineSessionFiles.length > 0) {
+          progress.start(
+            `Parsing Cline ${renderBar(0)} 0/${formatNumber(clineSessionFiles.length)} transcripts | buckets 0`,
+          );
+        }
+        clineResult = await parseClineIncremental({
+          sessionFiles: clineSessionFiles,
+          scanCompleteRoots: clineScan.completedRoots,
+          cursors,
+          queuePath,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing Cline ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(
+                p.total,
+              )} transcripts | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+      } catch (err) {
+        warnProviderParseFailure("Cline", err, opts);
+      }
+    }
+
     // ── Cursor (API-based) ──
     // One-time migration: earlier CLI versions mis-parsed the Cursor CSV after
     // Cursor inserted new "Cloud Agent ID"/"Automation ID" columns, writing
@@ -3057,6 +3094,7 @@ async function cmdSync(argv, context = {}) {
       zcodeResult.recordsProcessed +
       kilocodeResult.recordsProcessed +
       roocodeResult.recordsProcessed +
+      clineResult.recordsProcessed +
       zedResult.recordsProcessed +
       gooseResult.recordsProcessed +
       dshResult.recordsProcessed +
@@ -3098,6 +3136,7 @@ async function cmdSync(argv, context = {}) {
       zcodeResult.bucketsQueued +
       kilocodeResult.bucketsQueued +
       roocodeResult.bucketsQueued +
+      clineResult.bucketsQueued +
       zedResult.bucketsQueued +
       gooseResult.bucketsQueued +
       dshResult.bucketsQueued +
