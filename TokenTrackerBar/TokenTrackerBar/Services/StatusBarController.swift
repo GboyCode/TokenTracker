@@ -894,32 +894,36 @@ final class StatusBarController: NSObject {
             // another display (#481), so defer activation until the popover has
             // anchored, gate it on no other window being able to steal key focus,
             // then realign the popover with its anchor if activation displaced it.
-            // Older systems use the classic material and stay non-activating.
-            if #available(macOS 26, *) {
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.popover.isShown else { return }
-                    // Check the popover window itself, not the anchor: the anchor
-                    // is .canJoinAllSpaces, so it reports admitted on every regular
-                    // Space even when the popover window stayed pinned to another
-                    // desktop (#506).
-                    let popoverAdmitted = self.popover.contentViewController?.view.window?.isOnActiveSpace ?? true
-                    if popoverAdmitted {
+            // Older systems use the classic material and stay non-activating
+            // unless the popover missed the active Space.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.popover.isShown else { return }
+                // Check the popover window itself, not the anchor: the anchor
+                // is .canJoinAllSpaces, so it reports admitted on every regular
+                // Space even when the popover window stayed pinned to another
+                // desktop (#506).
+                let popoverAdmitted = self.popover.contentViewController?.view.window?.isOnActiveSpace ?? true
+                if popoverAdmitted {
+                    if #available(macOS 26, *) {
                         guard self.canActivateForPopoverGlass() else { return }
                         NSApp.activate(ignoringOtherApps: true)
                         DispatchQueue.main.async { [weak self] in
                             self?.realignPopoverWithAnchorIfDisplaced()
                         }
-                    } else {
-                        // The popover is shown but not admitted onto the active
-                        // Space — either that Space is another app's full-screen
-                        // Space (admits no window of an inactive app), or the
-                        // reused popover window stayed pinned to the desktop it
-                        // was first ordered in on (#506). Activation is the only
-                        // way in; then re-show it once at the same anchor.
-                        NSApp.activate(ignoringOtherApps: true)
-                        DispatchQueue.main.async { [weak self] in
-                            self?.reshowPopoverOnActiveSpace()
-                        }
+                    }
+                } else {
+                    // The popover is shown but not admitted onto the active
+                    // Space — either that Space is another app's full-screen
+                    // Space (admits no window of an inactive app), or the
+                    // reused popover window stayed pinned to the desktop it
+                    // was first ordered in on (#506). Activation is the only
+                    // way in; then re-show it once at the same anchor. This
+                    // runs on every macOS version: the child-window attach
+                    // alone does not get it onto a full-screen Space on
+                    // macOS 15 (#681).
+                    NSApp.activate(ignoringOtherApps: true)
+                    DispatchQueue.main.async { [weak self] in
+                        self?.reshowPopoverOnActiveSpace()
                     }
                 }
             }
