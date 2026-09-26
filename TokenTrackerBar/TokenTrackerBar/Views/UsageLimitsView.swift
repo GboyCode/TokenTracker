@@ -528,8 +528,7 @@ struct UsageLimitsView: View {
         let fillColor = Color.limitBar(fraction: usedFraction)
 
         // Time-aware pace mark (CodexBar-style notch). Shown once the window has
-        // meaningful usage (≥5%) so a fresh window doesn't float a mark in empty
-        // track. Green when on/under pace, red when ahead (deficit). Requires a
+        // nonzero usage. Green when on/under pace, red when ahead (deficit). Requires a
         // trusted window length; monthly / billing-cycle windows show no mark.
         var pacePercent: Double?
         var paceOver = false
