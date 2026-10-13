@@ -1,0 +1,63 @@
+name: Daily upstream sync
+
+on:
+  schedule:
+    # 05:17 Asia/Taipei (UTC+8), away from the busy start of the hour.
+    - cron: '17 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gboycode-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    # Keep this automation limited to the owner's public forks and free runners.
+    if: github.repository_owner == 'GboyCode' && github.event.repository.fork && github.event.repository.private == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      EXPECTED_UPSTREAM: xiufengsun/TokenTracker
+    steps:
+      - name: Sync default branch without discarding fork commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="$(gh api "repos/$GITHUB_REPOSITORY")"
+          test "$(jq -r '.visibility' <<<"$metadata")" = public
+          test "$(jq -r '.parent.full_name' <<<"$metadata")" = "$EXPECTED_UPSTREAM"
+          branch="$(jq -r '.default_branch' <<<"$metadata")"
+          upstream_branch="$(jq -r '.parent.default_branch' <<<"$metadata")"
+          if [ "$branch" != "$upstream_branch" ]; then
+            echo "::error::Default branch names differ; manual review is required."
+            exit 1
+          fi
+          echo "Syncing $GITHUB_REPOSITORY:$branch from $EXPECTED_UPSTREAM:$upstream_branch"
+          # This API preserves fork commits and rejects conflicts. Never force/reset.
+          if ! result="$(gh api --method POST "repos/$GITHUB_REPOSITORY/merge-upstream" -f branch="$branch" 2>&1)"; then
+            printf '%s\n' "$result"
+            printf '### Upstream sync needs attention\n\nThe sync was rejected. Existing fork commits were preserved. Resolve the history conflict or permission issue before retrying.\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          printf '%s\n' "$result" | jq .
+          printf '### Upstream sync\n\nRepository: %s\n\nBranch: %s\n\n%s\n' "$GITHUB_REPOSITORY" "$branch" "$(jq -r '.message' <<<"$result")" >> "$GITHUB_STEP_SUMMARY"
+
+          # GitHub disables schedules after 60 days without repository activity.
+          # An empty commit after 45 idle days keeps this schedule alive without
+          # changing any files or triggering other workflows with GITHUB_TOKEN.
+          encoded_branch="$(jq -rn --arg value "$branch" '$value | @uri')"
+          current="$(gh api "repos/$GITHUB_REPOSITORY/commits/$encoded_branch")"
+          commit_date="$(jq -r '.commit.committer.date' <<<"$current")"
+          age="$(( $(date +%s) - $(date -d "$commit_date" +%s) ))"
+          if [ "$age" -ge 3888000 ]; then
+            old_sha="$(jq -r '.sha' <<<"$current")"
+            tree_sha="$(jq -r '.commit.tree.sha' <<<"$current")"
+            payload="$(jq -n --arg tree "$tree_sha" --arg parent "$old_sha" '{message:"chore: keep upstream sync schedule active [skip ci]",tree:$tree,parents:[$parent]}')"
+            new_sha="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/commits" --input - <<<"$payload" --jq .sha)"
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$encoded_branch" -f sha="$new_sha" -F force=false --silent
+            printf '\nCreated an empty keepalive commit after 45 idle days.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
